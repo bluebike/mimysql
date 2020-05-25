@@ -28,7 +28,7 @@ int main(int argc, char **argv)
     char buf[128];
     
 
-    while ((ch = getopt(argc, argv, "tvu:p:S:D:q:c:L:T:")) != -1) {
+    while ((ch = getopt(argc, argv, "tvu:p:S:D:e:c:L:T:")) != -1) {
         switch (ch) {
         case 'h':
             pass = strdup(optarg);
@@ -45,7 +45,7 @@ int main(int argc, char **argv)
         case 'D':
             db = strdup(optarg);
             break;
-        case 'q':
+        case 'e':
             query = strdup(optarg);
             break;
         case 'c':
@@ -63,6 +63,8 @@ int main(int argc, char **argv)
         case 'L':
             log_level = atoi(optarg);
             break;
+
+            cae
             
         default:
             fprintf(stderr,"what??: %c\n", ch);
