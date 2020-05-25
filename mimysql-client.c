@@ -1393,9 +1393,8 @@ MYSQL *mysql_init_env(MYSQL *m, MIMYSQL_ENV *env) {
     m->env  = env;
     mi_buf_init(env,&m->outbuf,0);
     mi_buf_init(env,&m->field_data_buffer,0);
-    mi_buf_init(env,&m->scramble,0);
+    mi_buf_init(env,&m->seed,0);
     mi_buf_init(env,&m->auth_data,0);
-    mi_buf_init(env,&m->replytext,0);
     m->bufa = NULL;
 
     mi_inbuf_init(env,&m->inbuf,0);
@@ -1487,8 +1486,7 @@ void mysql_close(MYSQL *m) {
     mi_buf_close(&m->outbuf);
     mi_buf_close(&m->field_data_buffer);
     mi_buf_close(&m->auth_data);
-    mi_buf_close(&m->scramble);
-    mi_buf_close(&m->replytext);
+    mi_buf_close(&m->seed);
 
     mi_inbuf_close(&m->inbuf);
 
@@ -1678,7 +1676,6 @@ int mi_send_com(MYSQL *m, int cmd, const char *data, size_t data_len) {
 // ----------------------------------------------------------------------------------------------------
 
 void mi_reset_reply_vars(MYSQL *m) {
-    mi_buf_reset(&m->replytext);
     m->warnings = 0;
     m->affected_rows = 0;
     m->last_insert_id = 0;
@@ -1907,7 +1904,7 @@ void print_server_handshake(MYSQL *m) {
     char *f;
     char *sa;
 
-    sa = hex_string_buf(env,&m->scramble);
+    sa = hex_string_buf(env,&m->seed);
 
     mi_log(m, MI_LOG_TRACE, "server handshake:");
     mi_log(m, MI_LOG_TRACE, "protocol-version: %d", m->protocol_version);
@@ -1916,7 +1913,7 @@ void print_server_handshake(MYSQL *m) {
     mi_log(m, MI_LOG_TRACE, "server-caps: %8lx", m->server_caps);
     mi_log(m, MI_LOG_TRACE, "server-collation: %d", m->server_collation);
     mi_log(m, MI_LOG_TRACE, "server-collation: %04x", m->server_status);
-    mi_log(m, MI_LOG_TRACE, "scramble-len: %d", mi_buf_size(&m->scramble));
+    mi_log(m, MI_LOG_TRACE, "seed-len: %d", mi_buf_size(&m->seed));
     mi_log(m, MI_LOG_TRACE, "scrmable: %s",  sa);
     mi_log(m, MI_LOG_TRACE, "auth-plugin: %s", notnull(m->auth_plugin_name));
     for(i=0; i < 64; i++) {
@@ -1968,7 +1965,7 @@ int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
     }
 
     m->connection_id = mdata_uint32(p); p += 4;
-    mi_buf_add_data(&m->scramble,p,8);  p += 8;
+    mi_buf_add_data(&m->seed,p,8);  p += 8;
     /* reserved */                      p += 1;
     m->server_caps = (uint64_t) mdata_uint16(p);   p += 2;
     m->server_collation =  *p;             p += 1;
@@ -1993,7 +1990,7 @@ int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
         l = m->plugin_data_len - 9;
         if(l < 12) l = 12;
         if((e - p) < 13)  goto overflow;
-        mi_buf_add_data(&m->scramble,p,l); p += l;
+        mi_buf_add_data(&m->seed,p,l); p += l;
         p++;
     }
 
@@ -2036,7 +2033,7 @@ int mimysql_native_password(MYSQL *m) {
     char *sa;
     char *aa;
     
-    MI_BUF *s = &m->scramble;
+    MI_BUF *s = &m->seed;
     int seed_len;
     int pass_len;
     int i;
@@ -2050,7 +2047,7 @@ int mimysql_native_password(MYSQL *m) {
     seed_len = mi_buf_size(s);
 
     if(seed_len != 20) {
-        mi_log(m,MI_LOG_ERROR,"(mysql_native_password) bad scramble len: %d", seed_len);
+        mi_log(m,MI_LOG_ERROR,"(mysql_native_password) bad seed len: %d", seed_len);
         return -1;
     }
         
@@ -2076,10 +2073,10 @@ int mimysql_native_password(MYSQL *m) {
 
 
     if(m->log_level >= MI_LOG_TRACE) {
-        sa = hex_string_buf(env,&m->scramble);
+        sa = hex_string_buf(env,&m->seed);
         aa = hex_string_buf(env,&m->auth_data);
-        mi_log(m,MI_LOG_TRACE,"SCRAMBLE: %s", sa);
-        mi_log(m,MI_LOG_TRACE,"RESULT:   %s", aa);
+        mi_log(m,MI_LOG_TRACE,"SEED:   %s", sa);
+        mi_log(m,MI_LOG_TRACE,"RESULT: %s", aa);
         env->free(sa);
         env->free(aa);
     }
@@ -2250,7 +2247,7 @@ MYSQL *mysql_real_connect(MYSQL *m,
     mi_log(m,MI_LOG_DEBUG,"handlshake reply sent");
 
     if(mi_wait_for_ok(m) < 0) {
-        mi_log(m,MI_LOG_ERROR,"die not accept");
+        mi_log(m,MI_LOG_ERROR,"login not accept");
         mi_close_connection(m);        
         return NULL;
     }
@@ -2782,6 +2779,8 @@ unsigned int mysql_affected_rows(MYSQL * mysql) {
 unsigned int mysql_warning_count(MYSQL *mysql) {
     return mysql->warnings;
 }
+
+
 
 
 const char *mysql_get_type_name(int type) {

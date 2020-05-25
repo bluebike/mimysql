@@ -466,8 +466,7 @@ struct st_mysql {
     MI_BUF field_data_buffer;
     MI_BUF field_buffer;
     MI_BUF auth_data;
-    MI_BUF scramble;
-    MI_BUF replytext;
+    MI_BUF seed;
     MI_BUF info;
 
     char  *bufa;
