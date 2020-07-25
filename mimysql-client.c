@@ -210,16 +210,32 @@ static const char *notnull(const char *str) {
     return str ? str : "NULL";
 }
 
+void mi_log_printf(void *ptr, const char *msg) {
+    fprintf((FILE*) ptr, "%s\n", msg);
+}
 
 void mi_log(MYSQL *m, uint32_t level, const char *fmt, ...) {
     va_list ap;
-    if(level <= m->log_level) {
-        va_start(ap, fmt);
-        fprintf(stderr, "MI LOG: %d : ", level);
-        vfprintf(stderr,fmt, ap);
-        fprintf(stderr, "\n");
-        va_end(ap);
+    char *p;
+    char *e;
+    int len;
+    if(level > m->log_level)
+        return;
+    if(! m->log_buffer || m->log_buffer_size <= 0)  
+        return;
+    
+    p = m->log_buffer;
+    e = p + m->log_buffer_size;
+    va_start(ap, fmt);
+    len = snprintf(p, e - p , "MI LOG: %d [%d] ", level, m->connection_id);
+    va_end(ap);
+    p += len;
+    if(p < (e - 1)) {
+        len = vsnprintf(p, e - p ,fmt, ap);
+        p += len;
     }
+    *p=0;
+    m->log_func(m->log_ptr, m->log_buffer);
 }
 
 
@@ -1388,6 +1404,10 @@ MYSQL *mysql_init_env(MYSQL *m, MIMYSQL_ENV *env) {
     m->bufa = NULL;
 
     mi_inbuf_init(env,&m->inbuf,0);
+    m->log_buffer_size = 256;
+    m->log_buffer = env->alloc(m->log_buffer_size);
+    m->log_func = mi_log_printf;
+    m->log_ptr  = (void *) stderr;
 
     return m;
 }
@@ -1409,6 +1429,8 @@ void mysql_close(MYSQL *m) {
     assert(m->env->magic == MIMYSQL_ENV_MAGIC_V0);
 
     env = m->env;
+
+    mi_log(m,MI_LOG_TRACE,"mysql_close()");
 
     allocated = m->allocated;
 
@@ -1473,12 +1495,19 @@ void mysql_close(MYSQL *m) {
         m->bufa = NULL;
     }
 
+    if(m->log_buffer) {
+        env->free(m->log_buffer);
+        m->log_buffer = NULL;
+    }
+
     mi_buf_close(&m->outbuf);
     mi_buf_close(&m->field_data_buffer);
     mi_buf_close(&m->auth_data);
     mi_buf_close(&m->seed);
 
     mi_inbuf_close(&m->inbuf);
+
+
 
     memset(m,0, sizeof(MYSQL));
     

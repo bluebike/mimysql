@@ -481,9 +481,16 @@ struct st_mysql {
     uint64_t row_count;
     int res_open;
 
-    /* reply vars */
 
+    char *log_buffer;
+    int log_buffer_size;
     uint32_t log_level;    
+    void (*log_func)(void *ptr, const char *logline);
+    void *log_ptr;
+
+    /* reply vars */
+    
+
     uint16_t error_code;
     uint16_t server_status;
     uint16_t warnings;
