@@ -37,16 +37,6 @@ extern MIMYSQL_ENV *mimysql_default_env;
 
 /* --------------------------------------------------------- */
 
-
-
-
-
-
-
-
-
-/* --------------------------------------------------------- */
-
 const char *sqlstate_unknown = "HY000";
 const char *sqlstate_none = "HY000";
 

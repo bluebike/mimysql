@@ -63,8 +63,6 @@ int main(int argc, char **argv)
         case 'L':
             log_level = atoi(optarg);
             break;
-
-            cae
             
         default:
             fprintf(stderr,"what??: %c\n", ch);
