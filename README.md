@@ -1,4 +1,4 @@
-# mimysql - Small MySQL/MariaDB client in C
+# mimysql - Small MySQL/MariaDB client lib in C
 
 Small MySQL/MariaDB client with features and limitions
 
