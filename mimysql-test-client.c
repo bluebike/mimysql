@@ -14,6 +14,7 @@ int main(int argc, char **argv)
     char *user = getenv("USER");
     char *pass = NULL;
     char *db = "";
+    char *auth_plugin = NULL;
     // const char *st;
     int ret;
     int log_level = 0;
@@ -28,8 +29,11 @@ int main(int argc, char **argv)
     char buf[128];
     
 
-    while ((ch = getopt(argc, argv, "tvu:p:S:D:e:c:L:T:")) != -1) {
+    while ((ch = getopt(argc, argv, "tva:u:p:S:D:e:c:L:T:")) != -1) {
         switch (ch) {
+        case 'a':
+            auth_plugin = strdup(optarg);
+            break;
         case 'h':
             pass = strdup(optarg);
             break;
@@ -81,6 +85,10 @@ int main(int argc, char **argv)
      if(log_level) {
          fprintf(stderr,"set log level: %d\n", log_level);
          mysql->log_level = log_level;
+     }
+
+     if(auth_plugin) {
+         mysql_set_auth_plugin_name(mysql, auth_plugin);
      }
 
      if(mysql_real_connect(mysql,

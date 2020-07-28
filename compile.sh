@@ -1,10 +1,6 @@
-
-
-i=0
-while [ $i -lt 10 ] ; do
-    echo
-    let i=i+1
-done
+#
+# simple compile for mimysql
+#
 
 CFLAGS="-g -Wall"
 

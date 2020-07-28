@@ -12,7 +12,7 @@
 
 // -----------------------------------------------------------------------------------
 
-#define CR_MIN_ERROR                2000  
+#define CR_MIN_ERROR                2000
 #define CR_MAX_ERROR                2999
 
 #define CR_UNKOWN_ERROR             2000
@@ -23,7 +23,7 @@
 #define CR_VERSION_ERROR            2007
 #define CR_OUT_OF_MEMORY            2008
 #define CR_WRONG_HOST_INFO          2009
-#define CR_LOCALHOST_CONNECTION     2010 
+#define CR_LOCALHOST_CONNECTION     2010
 #define CR_TCP_CONNECTION           2011
 #define CR_SERVER_HANDSHAKE_ERR     2012
 #define CR_SERVER_LOST              2013
@@ -83,7 +83,7 @@
 #define SERVER_QUERY_NO_INDEX_USED          32
 #define SERVER_STATUS_CURSOR_EXISTS         64
 #define SERVER_STATUS_LAST_ROW_SENT        128
-#define SERVER_STATUS_DB_DROPPED           256 
+#define SERVER_STATUS_DB_DROPPED           256
 #define SERVER_STATUS_NO_BACKSLASH_ESCAPES 512
 #define SERVER_STATUS_METADATA_CHANGED    1024
 #define SERVER_QUERY_WAS_SLOW             2048
@@ -163,6 +163,14 @@
 // -----------------------------------------------------------------------------------
 
 
+#define MI_AUTH_OLD     2
+#define MI_AUTH_SWITCH  1
+#define MI_AUTH_OK      0
+#define MI_AUTH_ERROR  -1
+
+// -----------------------------------------------------------------------------------
+
+
 #define MI_BUF_PTR_OFFSET(o) ((o)->ptr - (o)->buf)
 
 
@@ -182,7 +190,7 @@
 
 
 
-// -----------------------------------------------------------------------------------    
+// -----------------------------------------------------------------------------------
 
 #define mput_uint16(T,A)	do { uint8_t *pT= (uint8_t*)(T);     \
                              *((uint16_t*)(pT))= (uint16_t) (A); \
@@ -216,7 +224,7 @@
 #define mput_int32(x) (*((int32_t*)(x)))
 #define mput_int16(x) (*((int16_t*)(x)))
 #define mput_int8(x)  (*((int8_t*)(x)))
-    
+
 // -----------------------------------------------------------------------------------
 
 enum enum_server_command
@@ -286,7 +294,7 @@ enum enum_mi_state
 #define MIMYSQL_ENV_MAGIC_V0 0x45563300
 
 
-#define MYSQL_FLAGS_PLUGIN_AUTH  
+#define MYSQL_FLAGS_PLUGIN_AUTH
 
 #define MI_LOG_NONE   0    /* weelll nothing */
 #define MI_LOG_ERROR  1    /* connection must be ended/restarted */
@@ -296,7 +304,7 @@ enum enum_mi_state
 #define MI_LOG_TRACE  5    /* tracing .. packets etc */
 
 
-#define MIMYSQL_ENV_VERBOSE 0x00001 
+#define MIMYSQL_ENV_VERBOSE 0x00001
 
 #define PACKET_OK   0x00
 #define PACKET_EOF  0xfe
@@ -367,8 +375,8 @@ struct st_mimysql_env  {
   size_t (*read)(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp);
   size_t (*write)(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp);
   void (*close)(MIMYSQL_IO *mio);
-  
-  
+
+
 };
 
 
@@ -400,32 +408,32 @@ typedef struct st_mi_buf {
 
 
 typedef struct st_mi_inbuf {
-    uint8_t *readptr; // pointer to read position 
+    uint8_t *readptr; // pointer to read position
     uint8_t *buffer;     // start of buffer
     uint8_t *endbuf;  // end o buffer
     uint8_t *packet_start;  // start of current packet
     uint8_t *packet_end;    // end of packet
     uint8_t *packet_data;   // start of data
 
-    MIMYSQL_ENV *env;        
-    
+    MIMYSQL_ENV *env;
+
     uint32_t packet_size;
     uint32_t buffer_length;
-    
+
     uint64_t reads;
     uint64_t packets;
     uint64_t compacts;
     uint64_t reallocs;
 
     int      error;
-    
+
     uint8_t  save;
     uint8_t  seq;
     uint8_t  allocated;
 
 
 
-    
+
 } MI_INBUF;
 
 
@@ -448,10 +456,10 @@ struct st_mysql {
     size_t  max_packet;
     const char *server_version;
     uint32_t connection_id;
-  
+
     uint64_t server_caps;
     uint64_t client_caps;
-    uint8_t protocol_version;  
+    uint8_t protocol_version;
     uint8_t server_collation;
     uint8_t fields_parsed;
     uint8_t packet_type;
@@ -470,7 +478,7 @@ struct st_mysql {
     MI_BUF info;
 
     char  *bufa;
-    
+
     MYSQL_FIELD *fields;
     MIMYSQL_FIELD_OFFSET *field_offsets;
     uint32_t  field_count;
@@ -484,12 +492,14 @@ struct st_mysql {
 
     char *log_buffer;
     int log_buffer_size;
-    uint32_t log_level;    
+    uint32_t log_level;
     void (*log_func)(void *ptr, const char *logline);
     void *log_ptr;
 
+    uint8_t sequence;
+
     /* reply vars */
-    
+
 
     uint16_t error_code;
     uint16_t server_status;
@@ -498,7 +508,7 @@ struct st_mysql {
     uint64_t last_insert_id;
     uint32_t errno;
     char sqlstate[6];
-    char error_text[MYSQL_ERRMSG_SIZE+1];    
+    char error_text[MYSQL_ERRMSG_SIZE+1];
     MYSQL_RES resp[1];
 };
 
@@ -608,9 +618,13 @@ extern MIMYSQL_ENV *mimysql_default_env;
 
 /*  custom api */
 
+int mysql_set_auth_plugin_name(MYSQL *m, const char *plugin_name);
+
 int mysql_prepare(MYSQL *mi,  const char *query, size_t length, ...);
 
 const char *mysql_get_type_name(int type);
 char *mysql_get_field_flags(char *to, int length, uint16_t flags);
+
+
 
 #endif

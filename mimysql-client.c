@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <math.h>
 
 
 extern MIMYSQL_ENV *mimysql_default_env;
@@ -13,6 +14,8 @@ extern MIMYSQL_ENV *mimysql_default_env;
 #define BUF_OVERFLOW   -2
 #define BUF_OUT_OF_MEM -3
 #define MINBUF 32
+
+
 
 
 #define ER(xx) client_errors[(xx)-CR_MIN_ERROR]
@@ -55,13 +58,13 @@ const char *mi_state_str[32] = {
      "QUERY_ROWS_EOF",   // 12
      "END",              // 13
      "STATE14",          // 14
-     "STATE15",          // 
-     "STATE16",          // 
-     "STATE17",          // 
-     "STATE18",          // 
-     "STATE19",          // 
-     "STATE20",          // 
-     "STATE21"           // 
+     "STATE15",          //
+     "STATE16",          //
+     "STATE17",          //
+     "STATE18",          //
+     "STATE19",          //
+     "STATE20",          //
+     "STATE21"           //
 };
 
 const char *client_errors[] =
@@ -221,9 +224,9 @@ void mi_log(MYSQL *m, uint32_t level, const char *fmt, ...) {
     int len;
     if(level > m->log_level)
         return;
-    if(! m->log_buffer || m->log_buffer_size <= 0)  
+    if(! m->log_buffer || m->log_buffer_size <= 0)
         return;
-    
+
     p = m->log_buffer;
     e = p + m->log_buffer_size;
     va_start(ap, fmt);
@@ -296,25 +299,163 @@ char *hex_string_buf(MIMYSQL_ENV *env, MI_BUF *bu) {
     return hex_string(env, bu->buf, bu->ptr - bu->buf);
 }
 
+static uint8_t *find_string_end(uint8_t *p, uint8_t *e) {
+    while(p < e) {
+        if(!*p) {
+            return p;
+        }
+        p++;
+    }
+    return NULL;
+}
+
+static char *str_dup(MYSQL *m, const char *str) {
+    char *n;
+    if(str == NULL) {
+        return NULL;
+    }
+    int len = strlen(str);
+    n = m->env->alloc(len + 1);
+    if(n == NULL) {
+        mi_log(m,MI_LOG_ERROR,"cannot alloc memory for str_dup");
+        return NULL;
+    }
+    memcpy(n,str,len+1);
+    return n;
+}
+
+#if 0
+static char *str_dupn(MYSQL *m, char *str, size_t len) {
+    char *n;
+    if(str == NULL) {
+        return NULL;
+    }
+    n = m->env->alloc(len + 1);
+    if(n == NULL) {
+        mi_log(m,MI_LOG_ERROR,"cannot alloc memory for str_dup");
+        return NULL;
+    }
+    memcpy(n,str,len);
+    n[len] = 0;
+    return n;
+}
+#endif
+
+
+int mysql_set_auth_plugin_name(MYSQL *m, const char *plugin_name)
+{
+    if(m->auth_plugin_name) {
+        m->env->free(m->auth_plugin_name);
+        m->auth_plugin_name = NULL;
+    }
+    if(plugin_name) {
+        m->auth_plugin_name = str_dup(m, (char*)plugin_name);
+        if(m->auth_plugin_name == NULL) {
+            return -1;
+        }
+    } else {
+        m->auth_plugin_name = NULL;
+    }
+    return 0;
+}
+
+/**
+ * old_password hanlding
+ */
+
+#define SCRAMBLE_LENGTH_323 8
+#define SCRAMBLED_PASSWORD_CHAR_LENGTH_323 (SCRAMBLE_LENGTH_323*2)
+
+struct my_rnd_struct {
+  unsigned long seed1,seed2,max_value;
+  double max_value_dbl;
+};
+
+static void my_rnd_init(struct my_rnd_struct *rand_st, uint32_t seed1, uint32_t seed2)
+{
+#ifdef HAVE_valgrind
+  bzero((char*) rand_st,sizeof(*rand_st));      /* Avoid UMC varnings */
+#endif
+  rand_st->max_value= 0x3FFFFFFFL;
+  rand_st->max_value_dbl=(double) rand_st->max_value;
+  rand_st->seed1=seed1%rand_st->max_value ;
+  rand_st->seed2=seed2%rand_st->max_value;
+}
+
+static double my_rnd(struct my_rnd_struct *rand_st)
+{
+  unsigned long seed1;
+  seed1= (rand_st->seed1*3+rand_st->seed2) % rand_st->max_value;
+  rand_st->seed2=(seed1+rand_st->seed2+33) % rand_st->max_value;
+  rand_st->seed1= seed1;
+  return (((double) seed1)/rand_st->max_value_dbl);
+}
+
+
+double my_rnd(struct my_rnd_struct *rand_st);
+
+
+/* old password hash  from MariaDB source */
+static void mi_hash_password(uint32_t *result, const char *password, uint32_t password_len)
+{
+  uint32_t nr=1345345333L, add=7, nr2=0x12345671L;
+  uint32_t tmp;
+  const char *password_end= password + password_len;
+  for (; password < password_end; password++)
+  {
+    if (*password == ' ' || *password == '\t')
+      continue;                                 /* skip space in password */
+    tmp= (uint32_t) (uint8_t) *password;
+    nr^= (((nr & 63)+add)*tmp)+ (nr << 8);
+    nr2+=(nr2 << 8) ^ nr;
+    add+=tmp;
+  }
+  result[0]=nr & (((uint32_t) 1L << 31) -1L); /* Don't use sign bit (str2int) */;
+  result[1]=nr2 & (((uint32_t) 1L << 31) -1L);
+}
+
+static void mi_scramble_323(char *to, const char *message, const char *password)
+{
+  struct my_rnd_struct rand_st;
+  uint32_t hash_pass[2], hash_message[2];
+
+  if (password && password[0])
+  {
+    char extra, *to_start=to;
+    const char *message_end= message + SCRAMBLE_LENGTH_323;
+    mi_hash_password(hash_pass,password, (uint32_t) strlen(password));
+    mi_hash_password(hash_message, message, SCRAMBLE_LENGTH_323);
+    my_rnd_init(&rand_st,hash_pass[0] ^ hash_message[0],
+               hash_pass[1] ^ hash_message[1]);
+    for (; message < message_end; message++)
+      *to++= (char) (floor(my_rnd(&rand_st)*31)+64);
+    extra=(char) (floor(my_rnd(&rand_st)*31));
+    while (to_start != to)
+      *(to_start++)^=extra;
+  }
+  *to= 0;
+}
+
+
 
 void mi_display_caps(MYSQL *m, uint64_t caps, char *where) {
     int count = 0;
     int len;
     char *p;
     char *f;
-    
+
     if(m->bufa == NULL) {
         m->bufa = m->env->alloc(1024);
         if(m->bufa == NULL) {
             return;
         }
     }
-    
+
     p = m->bufa;
     for(int i=0; i < 64; i++) {
         f = mysql_cap_flags[i];
         if((caps & ((uint64_t) 1 << i)) != 0 && f) {
-            len = strlen(f);            
+            len = strlen(f);
             if(count > 0)  {
                 *p++ = ',';
                 *p++ = ' ';
@@ -324,12 +465,12 @@ void mi_display_caps(MYSQL *m, uint64_t caps, char *where) {
             count++;
         }
     }
-    *p = 0;    
+    *p = 0;
     mi_log(m,MI_LOG_DEBUG,"(%s) CAPS: : %s", where, m->bufa);
 }
 
 int mi_display_packet(MYSQL *m, const char *where,  uint8_t *s, uint8_t *e) {
-    
+
     size_t size = e - s;
     int chunk;
     char *h;
@@ -374,7 +515,7 @@ int mi_display_packet(MYSQL *m, const char *where,  uint8_t *s, uint8_t *e) {
             if(i == 8) {
                 *h++ = ' ';
                 *h++ = '-';
-                *h++ = ' ';                
+                *h++ = ' ';
             }
             c = p[i] & 0xff;
             if(c < 32 || c >= 127) c = '.';
@@ -430,9 +571,9 @@ void mi_buf_reset(MI_BUF *o) {
 
 int mi_buf_reserve(MI_BUF *o, size_t needed) {
     size_t left = o->endp - o->ptr;
-    
+
     if(needed >= left) {
-        
+
         size_t size = o->endp - o->buf;
         size_t newsize = size + needed + 1;
 
@@ -440,7 +581,7 @@ int mi_buf_reserve(MI_BUF *o, size_t needed) {
         if(newsize < 64) {
             newsize = 64;
         } else if(newsize <= 2048) {
-            uint32_t mod = newsize % 256;            
+            uint32_t mod = newsize % 256;
             newsize -= mod;
             newsize += 64;
         } else {
@@ -448,14 +589,14 @@ int mi_buf_reserve(MI_BUF *o, size_t needed) {
             newsize -= mod;
             newsize += 2048;
         }
-        
+
         assert(newsize > size);
-        
+
         newbuf = o->env->realloc(o->buf, newsize);
         if(newbuf == NULL) {
             return -1;
         }
-        
+
         o->ptr  = newbuf + (o->ptr - o->buf);
         o->endp = newbuf + (o->endp- o->buf);
         o->buf  = newbuf;
@@ -525,7 +666,7 @@ int mi_buf_add_data_lenc(MI_BUF *o, uint8_t *data, size_t len) {
     if(mi_buf_reserve(o,len+9) <0) return -1;
     if(mi_buf_add_lenc(o,len) < 0) return -1;
     memcpy(o->ptr, data,len);
-    o->ptr += len;    
+    o->ptr += len;
     return len;
 }
 
@@ -590,13 +731,13 @@ int mi_buf_add_zero(MI_BUF *o, int count) {
 
 
 /**
- *   mi_buf_add_str, mi_buf_add_str_nul, alreays return string offset to start of buffer 
- *  
+ *   mi_buf_add_str, mi_buf_add_str_nul, alreays return string offset to start of buffer
+ *
  */
 
 size_t mi_buf_add_str(MI_BUF *o, const char *str, int len) {
     size_t off;
-    if(str == NULL) str = "";    
+    if(str == NULL) str = "";
     if(len < 0) len = strlen(str);
     len = strlen(str);
     if(mi_buf_reserve(o,len) <0) return -1;
@@ -608,10 +749,10 @@ size_t mi_buf_add_str(MI_BUF *o, const char *str, int len) {
 
 size_t mi_buf_add_str_nul(MI_BUF *o, const char *str, int len) {
     size_t off;
-    if(str == NULL) { str = ""; };    
+    if(str == NULL) { str = ""; };
     if(len <0) { len = strlen(str); }
     if(mi_buf_reserve(o,len+1) < 0) return -1;
-    off = o->ptr - o->buf;    
+    off = o->ptr - o->buf;
     memcpy(o->ptr, str, len);
     o->ptr += len;
     o->ptr[0] = 0;
@@ -675,7 +816,7 @@ size_t mi_buf_add_str_len1(MI_BUF *o, const char *str, int len) {
         len = strlen(str);
     }
     if(mi_buf_reserve(o,len + 1) <0) return -1;
-    off = MI_BUF_PTR_OFFSET(o);    
+    off = MI_BUF_PTR_OFFSET(o);
     *(o->ptr) = len;
     memcpy(o->ptr + 1, str, len);
     o->ptr += len + 1;
@@ -693,7 +834,7 @@ size_t mi_buf_add_str_fixed(MI_BUF *o, const char *str, int len) {
     } else {
         slen = strlen(str);
     }
-    off = MI_BUF_PTR_OFFSET(o);        
+    off = MI_BUF_PTR_OFFSET(o);
     if(mi_buf_reserve(o,len) <0) return -1;
     if(slen >= len) {
         memcpy(o->ptr,str,len);
@@ -705,7 +846,7 @@ size_t mi_buf_add_str_fixed(MI_BUF *o, const char *str, int len) {
 }
 
 
-#if 0 
+#if 0
 
 char * mi_int2str10(char *buf, int64_t d) {
     char *p;
@@ -745,7 +886,7 @@ char * mi_uint2strBase(char *buf, int64_t d, int base) {
                 strcpy(buf,"0x");
 
             }
-            
+
             return buf;
         }
         neg = 1;
@@ -775,7 +916,7 @@ int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...) {
     char *mark;
     char apu[30];
     va_arg ap;
-    
+
     va_start(ap,fmt);
     p = (char *) fmt;
     mark = p;
@@ -797,7 +938,7 @@ int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...) {
             neg = 1;
             p++;
             break;
-            
+
         case '-':
             neg = 1;
             p++;
@@ -810,7 +951,7 @@ int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...) {
         defaut:
             break;
         }
-        
+
         do {
             switch(ch) {
             case 0:
@@ -824,10 +965,10 @@ int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...) {
                 beak;
             case '0':
             case '1':
-            case '2':                
+            case '2':
             case '3':
             case '4':
-            case '5':                
+            case '5':
             case '6':
             case '7':
             case '8':
@@ -839,7 +980,7 @@ int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...) {
             case ' ':
                 space = 1;
                 break;
-                
+
             case 'l':
                 l++;
                 break;
@@ -856,7 +997,7 @@ int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...) {
             }
         } while(!done && !eot);
     }
-    
+
 }
 
 #endif
@@ -881,7 +1022,7 @@ uint64_t get_lenc64(uint8_t **ptr, uint8_t *ep) {
         *ptr += 1;
         return BAD_LENC64;
     }
-        
+
     if(ch == 0xFc) {   // 1 + 2
         if(room < 3) {
             *ptr = ep;
@@ -929,7 +1070,7 @@ uint32_t get_lenc32(uint8_t **ptr, uint8_t *ep) {
         *ptr += 1;
         return BAD_LENC32;
     }
-        
+
     if(ch == 0xFc) {   // 1 + 2
         if(room < 3) {
             *ptr = ep;
@@ -974,8 +1115,8 @@ int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result) {
         return LENC_NO_DATA;
     }
 
-    ch = *p++;    
-    
+    ch = *p++;
+
     if(ch < 0xFB) {
         *result = ch;
         *ptr += 1;
@@ -986,7 +1127,7 @@ int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result) {
         *ptr += 1;
         return LENC_NULL;
     }
-    
+
     if(ch == 0xFC) {   /* 2 bytes */
         if(size >= 3) {
             *result = mdata_uint16(p);
@@ -1005,7 +1146,7 @@ int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result) {
             *ptr += 4;
             return LENC_OK;
         } else {
-            *ptr = ep;            
+            *ptr = ep;
             *result = 0;
             return LENC_NO_DATA;
         }
@@ -1015,7 +1156,7 @@ int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result) {
         if(size >= 9) {
             val = mdata_uint64(p);
             *ptr += 9;
-            *result = val;            
+            *result = val;
             if(val > 0xffffffff) {
                 return LENC_OVERFLOW;
             }
@@ -1026,7 +1167,7 @@ int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result) {
             return LENC_NO_DATA;
         }
     }
-    
+
     *result = 0;
     *ptr += 1;
     return LENC_EOF;
@@ -1044,8 +1185,8 @@ int mdata_lenc64(uint8_t **ptr, uint8_t *ep, uint64_t * result) {
         return LENC_NO_DATA;
     }
 
-    ch = *p++;    
-    
+    ch = *p++;
+
     if(ch < 0xFB) {
         *result = ch;
         *ptr += 1;
@@ -1062,16 +1203,16 @@ int mdata_lenc64(uint8_t **ptr, uint8_t *ep, uint64_t * result) {
             *ptr += 3;
             return LENC_OK;
         } else {
-            *ptr = ep;            
+            *ptr = ep;
             *result = 0;
             return LENC_NO_DATA;
         }
     }
 
     if(ch == 0xFD) {  /* 1 + 3 bytes */
-        
+
         if(size >= 4) {
-            *ptr += 4;        
+            *ptr += 4;
             *result = mdata_uint24(p);
             return LENC_OK;
         } else {
@@ -1087,16 +1228,16 @@ int mdata_lenc64(uint8_t **ptr, uint8_t *ep, uint64_t * result) {
             *ptr += 9;
             return LENC_OK;
         } else {
-            *ptr = ep;            
+            *ptr = ep;
             *result = 0;
             return LENC_NO_DATA;
         }
     }
 
-    // 0xff == EOF 
-    
+    // 0xff == EOF
+
     *result = 0;
-    *ptr += 1;    
+    *ptr += 1;
     return LENC_EOF;
 }
 
@@ -1138,7 +1279,7 @@ MI_INBUF *mi_inbuf_init(MIMYSQL_ENV *env, MI_INBUF *b, size_t size) {
     b->readptr        = b->buffer;
     b->packet_start   = b->buffer;
     b->packet_end     = NULL;
-    b->packet_data    = NULL;    
+    b->packet_data    = NULL;
     b->endbuf         = b->buffer + size - 1;   // left room for zero
     b->env            = env;
     return b;
@@ -1227,13 +1368,13 @@ int mi_inbuf_realloc(MI_INBUF *b, size_t needed) {
         b->readptr       = newbuf + (b->readptr - oldbuf);
         b->endbuf        = newbuf + (b->endbuf  - oldbuf);
         b->packet_start  = newbuf + (b->packet_start - oldbuf);
-        
+
         b->packet_end  = NULL;
         b->packet_data = NULL;
-        
+
         b->buffer = newbuf;
     }
-    b->buffer_length = needed;    
+    b->buffer_length = needed;
     b->reallocs++;
 
     return 1;
@@ -1265,7 +1406,7 @@ int mi_connection_has_failed(MYSQL *m,  int error) {
 int mi_close_connection(MYSQL *m) {
     mi_log(m,MI_LOG_INFO,"connection closed");
     if(m->mio) {
-        m->env->close(m->mio);    
+        m->env->close(m->mio);
         m->connected = 0;
         m->mio = NULL;
     }
@@ -1284,12 +1425,12 @@ int mi_read_next_packet(MYSQL *m) {
 
     if(b->packet_end) {
         *(b->packet_end) = b->save;
-        b->packet_start = b->packet_end;        
+        b->packet_start = b->packet_end;
     } else {
         b->packet_start = b->buffer;
     }
-    
-    b->packet_end = NULL;    
+
+    b->packet_end = NULL;
     b->packet_data = NULL;
 
     if(b->packet_start > 0 && b->packet_start == b->readptr) {
@@ -1313,7 +1454,8 @@ int mi_read_next_packet(MYSQL *m) {
         } while((b->readptr - b->packet_start) <  4);
     }
 
-    b->packet_size = mdata_uint24(b->packet_start);    b->seq   = b->packet_start[3];
+    b->packet_size = mdata_uint24(b->packet_start);
+    b->seq   = b->packet_start[3];
 
     full_packet = b->packet_size + 4;
     if(full_packet > (b->endbuf - b->packet_start)) {
@@ -1336,20 +1478,22 @@ int mi_read_next_packet(MYSQL *m) {
             return -1;
         }
         if(ret == 0) {
-            goto eof;            
+            goto eof;
         }
         b->readptr += ret;
     }
 
     b->packet_end = b->packet_start + full_packet;
 
-    // we save first byte of next packet 
-    
+    // we save first byte of next packet
+
     b->save = *(b->packet_end);
     *(b->packet_end) = 0;
 
     b->packet_data = b->packet_start + 4;
     b->packets++;
+
+    m->sequence = b->seq;
 
     mi_display_packet(m, "READ", b->packet_start, b->packet_end);
 
@@ -1359,19 +1503,19 @@ int mi_read_next_packet(MYSQL *m) {
  erro:
     mi_log(m,MI_LOG_ERROR,"read failed: %d", err);
     SET_MYSQL_ERROR(m, CR_TCP_CONNECTION, sqlstate_unknown,"error in writing: %d", err);
-    mi_close_connection(m);    
+    mi_close_connection(m);
     return -1;
 
  eof:
     mi_log(m,MI_LOG_ERROR,"read eof %d", err);
     SET_MYSQL_ERROR(m, CR_SERVER_LOST, sqlstate_unknown,"connection to serve lost");
-    mi_close_connection(m);    
+    mi_close_connection(m);
     return -1;
 
  out_of_memory:
     mi_log(m,MI_LOG_ERROR,"out of memory");
     SET_MYSQL_ERROR(m,CR_OUT_OF_MEMORY,sqlstate_unknown,"out of memory");
-    mi_close_connection(m);        
+    mi_close_connection(m);
     return -1;
 }
 
@@ -1448,7 +1592,7 @@ void mysql_close(MYSQL *m) {
         env->free((void*)m->socket);
         m->socket = NULL;
     }
-    
+
     if(m->host) {
         env->free((void*)m->host);
         m->database = NULL;
@@ -1457,7 +1601,7 @@ void mysql_close(MYSQL *m) {
         env->free((void*)m->database);
         m->database = NULL;
     }
-    
+
     if(m->password) {
         len = strlen(m->password);
         memset((void*)m->password,0,len);
@@ -1475,7 +1619,7 @@ void mysql_close(MYSQL *m) {
         env->free((void*) m->fields);
         m->fields = NULL;
     }
-    
+
     if(m->field_offsets) {
         env->free((void *) m->field_offsets);
         m->field_offsets = NULL;
@@ -1510,7 +1654,7 @@ void mysql_close(MYSQL *m) {
 
 
     memset(m,0, sizeof(MYSQL));
-    
+
     if(allocated) {
         env->free((void*)m);
     }
@@ -1523,30 +1667,6 @@ void mimysql_query_reset(MYSQL *m) {
 }
 
 
-static uint8_t *find_string_end(uint8_t *p, uint8_t *e) {
-    while(p < e) {
-        if(!*p) {
-            return p;
-        }
-        p++;
-    }
-    return NULL;
-}
-
-static char *str_dup(MYSQL *m, char *str) {
-    char *n;
-    if(str == NULL) {
-        return NULL;
-    }
-    int len = strlen(str);
-    n = m->env->alloc(len + 1);
-    if(n == NULL) {
-        mi_log(m,MI_LOG_ERROR,"cannot alloc memory for str_dup");
-        return NULL;
-    }
-    memcpy(n,str,len+1);
-    return n;
-}
 
 
 static int mi_write_fully(MIMYSQL_IO *mio, uint8_t *ptr, size_t size, int *err) {
@@ -1567,7 +1687,7 @@ static int mi_write_fully(MIMYSQL_IO *mio, uint8_t *ptr, size_t size, int *err) 
 int mi_write_outbuf(MYSQL *m) {
     MIMYSQL_IO *mio = m->mio;
     MI_BUF *o = &m->outbuf;
-    uint8_t *buf = o->buf;    
+    uint8_t *buf = o->buf;
     size_t  write_size = o->ptr - o->buf;
     int ret;
     int err = 0;
@@ -1584,7 +1704,7 @@ int mi_write_outbuf(MYSQL *m) {
                mdata_uint24(buf),  buf[3], write_size);
     }
 
-    if(m->log_level >= MI_LOG_TRACE) {    
+    if(m->log_level >= MI_LOG_TRACE) {
         mi_display_packet(m, "WRITE", o->buf, o->ptr);
     }
 
@@ -1594,9 +1714,9 @@ int mi_write_outbuf(MYSQL *m) {
         mi_close_connection(m);
         return ret;
     }
-    
+
     o->ptr = o->buf;
-    
+
     return write_size;
 }
 
@@ -1610,31 +1730,31 @@ static int mimysql_generate_handshake_reply(MYSQL *m) {
     const char *db = m->database ? m->database : "";
     uint8_t *auth_data = m->auth_data.buf;
     size_t auth_data_len = mi_buf_size(&m->auth_data);
-    char *plugin_name = "mysql_native_password";
 
-    
     m->client_caps = m->server_caps & (CLIENT_MYSQL |
                                        CLIENT_CONNECT_WITH_DB |
                                        CLIENT_PROTOCOL_41 |
                                        CLIENT_SECURE_CONNECTION |
                                        CLIENT_PLUGIN_AUTH |
                                        CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
-                                       CLIENT_DEPRECATE_EOF                                       
+                                       CLIENT_DEPRECATE_EOF
                                        );
 
     ulen = strlen(user);
     dblen = strlen(db);
-    plugin_len = strlen(plugin_name);
-    
-    // just for usere have some extra space 
-    
+    plugin_len = strlen(m->auth_plugin_name);
+
+    // just for usere have some extra space
+
     if(mi_buf_reserve(o, 100 + ulen + dblen + plugin_len) < 0) {
-        SET_MYSQL_ERROR(m,CR_OUT_OF_MEMORY,sqlstate_unknown,"out of memory");        
+        SET_MYSQL_ERROR(m,CR_OUT_OF_MEMORY,sqlstate_unknown,"out of memory");
         return -1;
     }
-    
-    mi_buf_reset_header(o,1);
-    
+
+    m->sequence++;
+
+    mi_buf_reset_header(o,m->sequence);
+
     mi_buf_add_uint32(o, m->client_caps);
     mi_buf_add_uint32(o, mimysql_max_packet);
     mi_buf_add_uint8(o, 45);
@@ -1643,7 +1763,7 @@ static int mimysql_generate_handshake_reply(MYSQL *m) {
     mi_buf_add_str_nul(o, user, ulen);
     if(m->client_caps &  CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA) {
         mi_buf_add_lenc(o, auth_data_len);
-        mi_buf_add_data(o, auth_data, auth_data_len);        
+        mi_buf_add_data(o, auth_data, auth_data_len);
     } else if(m->client_caps & CLIENT_SECURE_CONNECTION) {
         mi_buf_add_uint8(o, auth_data_len);
         mi_buf_add_data(o, auth_data, auth_data_len);
@@ -1654,14 +1774,14 @@ static int mimysql_generate_handshake_reply(MYSQL *m) {
         mi_buf_add_str_nul(o, db, dblen);
     }
     if(m->client_caps & CLIENT_PLUGIN_AUTH) {
-        mi_buf_add_str_nul(o, plugin_name, plugin_len);
+        mi_buf_add_str_nul(o, m->auth_plugin_name, plugin_len);
     }
-    
+
     mi_buf_set_length(o);
 
     // mi_display_packet(m, "handshake-reply",o->buf, o->ptr);
 
-    
+
     return 0;
 }
 
@@ -1670,27 +1790,28 @@ int mi_send_com(MYSQL *m, int cmd, const char *data, size_t data_len) {
     MI_BUF *o = &m->outbuf;
     if(data == NULL) data_len = 0;
 
-        
+
     mi_buf_reset(o);
 
     if(mi_buf_reserve(o, 5 + data_len) < 0) {
         return -1;
     }
-    
-    mi_buf_reset_header(o,0);
+
+    m->sequence = 0;
+    mi_buf_reset_header(o,m->sequence);
     mi_buf_reserve(o,1 + data_len);
     mi_buf_add_uint8(o,cmd);
     if(data_len > 0) {
         mi_buf_add_data(o, (uint8_t*) data, data_len);
     }
-    
+
     mi_buf_set_length(o);
-    
+
     return  mi_write_outbuf(m);
-       
+
 }
 
-                
+
 
 // ----------------------------------------------------------------------------------------------------
 
@@ -1708,18 +1829,22 @@ void mi_reset_reply_vars(MYSQL *m) {
 //  PACKET_OK  0x00
 
 int mi_is_ok_packet(uint8_t *p, uint8_t *e) {
-    return (e -p) >= 6 && (p[0] == PACKET_OK);
+    return (e - p) >= 6 && (p[0] == PACKET_OK);
 }
 
 int mi_is_okeof_packet(uint8_t *p, uint8_t *e) {
-    return (e -p) >= 6 && ((e -p) < 0xffffff) && (p[0] == PACKET_EOF);
+    return (e - p) >= 6 && ((e -p) < 0xffffff) && (p[0] == PACKET_EOF);
+}
+
+int mi_is_authentication_switch_packet(uint8_t *p, uint8_t *e) {
+    return (e - p) >= 1 && (p[0] == PACKET_EOF);
 }
 
 
 int mi_parse_ok_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
     int ret;
     if((e - p) < 9) return 0;
-    
+
     if(*p == PACKET_OK) {
         // ok
     } else if(*p == PACKET_EOF && m->client_caps & CLIENT_DEPRECATE_EOF) {
@@ -1728,7 +1853,7 @@ int mi_parse_ok_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
         return 0;
     }
 
-    
+
     p++;
 
     mi_reset_reply_vars(m);
@@ -1753,7 +1878,11 @@ int mi_parse_ok_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
 
 
 int mi_is_eof_packet(uint8_t *p, uint8_t *e) {
-    return (e -p) < 9 && (p[0] == PACKET_EOF);    
+    return (e -p) < 9 && (p[0] == PACKET_EOF);
+}
+
+int mi_is_eof_auth_packet(uint8_t *p, uint8_t *e) {
+    return (e -p) == 1 && (p[0] == PACKET_EOF);
 }
 
 int mi_parse_eof_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
@@ -1770,6 +1899,39 @@ int mi_parse_eof_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
 
     return 1;
 }
+
+
+int mi_parse_authentication_switch_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
+    MIMYSQL_ENV *env = m->env;
+    uint8_t *tmp;
+
+    if(*p != PACKET_EOF) return 0;
+    if((e - p) < 1) return -1;
+    p++;
+
+    mi_reset_reply_vars(m);
+
+    m->packet_type = PACKET_EOF;
+
+    if(m->auth_plugin_name == NULL) {
+        env->free(m->auth_plugin_name);
+    }
+
+    tmp = find_string_end(p,e);
+    if(!tmp) {
+        return -1;
+    }
+    if((m->auth_plugin_name = str_dup(m, (char*)p)) == NULL) {
+        return -1;
+    }
+
+    p = tmp + 1;
+    mi_buf_reset(&m->seed);
+    mi_buf_add_data(&m->seed, p, e - p);
+
+    return 1;
+}
+
 
 
 // PACKET_ERR  0xff
@@ -1819,21 +1981,21 @@ int parse_a_field_string_data(MYSQL *m, uint8_t **ptr, uint8_t *e,
     if((len = get_lenc64(&p,e)) == BAD_LENC64) {
         return FERR_BAD_LENGTH;
     }
-    
+
     if((e - p) < len)
         return FERR_TOO_BIG;
 
     if(mi_buf_reserve(o,len +1) < 0) {
         return FERR_OUT_OF_MEM;
     }
-    
+
     *offset = o->ptr - o->buf;
-    *length = len;    
+    *length = len;
 
     memcpy(o->ptr, p, len);
     o->ptr[len] = 0;
     o->ptr += len + 1;
-    
+
     p += len;
     *ptr    = p;
 
@@ -1857,10 +2019,10 @@ int mi_parse_column_packet(MYSQL *m, uint8_t *p, uint8_t *e,
     // 1.  string<lenenc>  catalog ("def")
     pos = "parse catalog";
     if((ret = parse_a_field_string_data(m, &p, e, &f->catalog_length, &o->catalog_offset)) < 0) goto err;
-    
+
     // 2.  string<lenenc>  db
     pos = "parse db";
-    if((ret = parse_a_field_string_data(m, &p, e, &f->db_length, &o->db_offset)) < 0) goto err;    
+    if((ret = parse_a_field_string_data(m, &p, e, &f->db_length, &o->db_offset)) < 0) goto err;
 
     // 3.  string<lenenc>  table_alias / table
     pos = "parse table_alias";
@@ -1868,15 +2030,15 @@ int mi_parse_column_packet(MYSQL *m, uint8_t *p, uint8_t *e,
 
     // 4.  string<lenenc>  table  / orig_table
     pos = "parse org_table";
-    if((ret = parse_a_field_string_data(m, &p, e, &f->org_table_length, &o->org_table_offset)) < 0) goto err;    
+    if((ret = parse_a_field_string_data(m, &p, e, &f->org_table_length, &o->org_table_offset)) < 0) goto err;
 
     // 5. string<lenenc>  column_alias
     pos = "parse column_alias";
-    if((ret = parse_a_field_string_data(m, &p, e, &f->name_length, &o->name_offset)) < 0) goto err;        
+    if((ret = parse_a_field_string_data(m, &p, e, &f->name_length, &o->name_offset)) < 0) goto err;
 
     // 6. string<lenenc>  column  (org column)
     pos = "parse org_column";
-    if((ret = parse_a_field_string_data(m, &p, e, &f->org_name_length, &o->org_name_offset)) < 0) goto err;            
+    if((ret = parse_a_field_string_data(m, &p, e, &f->org_name_length, &o->org_name_offset)) < 0) goto err;
 
     // fixed length  // should 0xC
     pos ="get fixed fields";
@@ -1885,15 +2047,15 @@ int mi_parse_column_packet(MYSQL *m, uint8_t *p, uint8_t *e,
     pos = "fixed field len";
     if(val < 0x0c) goto bad;
 
-    pos = "fixed field in message";    
+    pos = "fixed field in message";
     if((e - p) < 0xc) goto bad;
-    
+
     f->charsetnr = mdata_uint16(p); p += 2;
     f->length    = mdata_uint32(p); p += 4;
     f->type      = *p++;
     f->flags     = mdata_uint16(p); p += 2;
     f->decimals  = *p++;
-    
+
     if(m->log_level >= MI_LOG_TRACE) {
         mi_log(m,MI_LOG_TRACE, "(field) (%d) field has been parsed", m->field_index);
     }
@@ -1902,7 +2064,7 @@ int mi_parse_column_packet(MYSQL *m, uint8_t *p, uint8_t *e,
  bad:
     mi_log(m,MI_LOG_ERROR, "(field) (%d) (%s) parsing error", m->field_index, pos);
     return -1;
-    
+
 
  err:
     if(ret == FERR_BAD_LENGTH) {
@@ -1914,6 +2076,79 @@ int mi_parse_column_packet(MYSQL *m, uint8_t *p, uint8_t *e,
     }
     return -1;
 }
+
+
+int mi_wait_for_ok(MYSQL *m) {
+    int ret;
+    uint8_t ptype;
+    MI_INBUF *b = &m->inbuf;
+
+    if(mi_read_next_packet(m) < 0){
+        return -1;
+    }
+
+    ptype = b->packet_data[0];
+
+    if(mi_is_ok_packet(b->packet_data, b->packet_end)) {
+        m->packet_type = PACKET_OK;
+        ret = mi_parse_ok_packet(m, b->packet_data, b->packet_end);
+        mi_log(m,MI_LOG_DEBUG,"(waitok) OK server-status: %d,  info=%s", m->server_status, m->info.buf ? (const char*) m->info.buf : "NULL");
+    } else if(mi_is_err_packet(b->packet_data, b->packet_end)) {
+        m->packet_type = PACKET_ERR;
+        ret = mi_parse_err_packet(m, b->packet_data, b->packet_end);
+        mi_log(m,MI_LOG_WARN,"(waitok) got error  packet: error-code: %d,  info=%s", m->errno,  m->error_text);
+        return -1;
+    } else {
+        mi_log(m,MI_LOG_ERROR,"(waitok) illegal reply type: %d", ptype);
+        return -1;
+    }
+
+    return 1;
+}
+
+int mi_wait_for_auth_reply(MYSQL *m) {
+    int ret;
+    uint8_t ptype;
+    MI_INBUF *b = &m->inbuf;
+
+    if(mi_read_next_packet(m) < 0){
+        return MI_AUTH_ERROR;
+    }
+
+    ptype = b->packet_data[0];
+
+    mi_log(m, MI_LOG_DEBUG, "(auth-reply) type=%d len=%d seq=%d", ptype, b->packet_end - b->packet_data, b->seq);
+
+    if(mi_is_ok_packet(b->packet_data, b->packet_end)) {
+        m->packet_type = PACKET_OK;
+        ret = mi_parse_ok_packet(m, b->packet_data, b->packet_end);
+        mi_log(m,MI_LOG_DEBUG,"(waitok) OK server-status: %d,  info=%s", m->server_status, m->info.buf ? (const char*) m->info.buf : "NULL");
+        return MI_AUTH_OK;
+
+    } else if(mi_is_eof_auth_packet(b->packet_data, b->packet_end)) {
+        m->packet_type = PACKET_EOF;
+        mi_log(m,MI_LOG_DEBUG,"(waitok) short AUTHENTICATION_SWITCH: %s", m->auth_plugin_name);
+        return MI_AUTH_OLD;
+
+    } else if(mi_is_authentication_switch_packet(b->packet_data, b->packet_end)) {
+        m->packet_type = PACKET_EOF;
+        ret = mi_parse_authentication_switch_packet(m, b->packet_data, b->packet_end);
+        mi_log(m,MI_LOG_DEBUG,"(waitok) AUTHENTICATION_SWITCH: %s", m->auth_plugin_name);
+        return MI_AUTH_SWITCH;
+
+    } else if(mi_is_err_packet(b->packet_data, b->packet_end)) {
+        m->packet_type = PACKET_ERR;
+        ret = mi_parse_err_packet(m, b->packet_data, b->packet_end);
+        mi_log(m,MI_LOG_WARN,"(waitok) got error  packet: error-code: %d,  info=%s", m->errno,  m->error_text);
+        return MI_AUTH_ERROR;
+    } else {
+        mi_log(m,MI_LOG_ERROR,"(waitok) illegal reply type: %d", ptype);
+        return MI_AUTH_ERROR;
+    }
+}
+
+
+
 
 
 
@@ -1946,7 +2181,7 @@ void print_server_handshake(MYSQL *m) {
     env->free(sa);
 }
 
-                                       
+
 
 
 int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
@@ -1980,7 +2215,7 @@ int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
     mi_log(m,MI_LOG_DEBUG,"(parse-handshake) server version: (%s)", m->server_version);
 
     if((e - p) < 27) {
-        goto overflow;        
+        goto overflow;
     }
 
     m->connection_id = mdata_uint32(p); p += 4;
@@ -2019,7 +2254,7 @@ int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
             mi_log(m,MI_LOG_ERROR, "(parse-handshake) plugin data no nul");
             goto overflow;
         }
-        if((m->auth_plugin_name = str_dup(m, (char*)p)) == NULL) {
+        if(mysql_set_auth_plugin_name(m, (const char *) p)< 0) {
             goto out_of_mem;
         }
     }
@@ -2033,12 +2268,12 @@ int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
         print_server_handshake(m);
     }
     return 0;
-    
+
 
  overflow:
     SET_MYSQL_ERROR(m,CR_MALFORMED_PACKET,sqlstate_unknown,"cannot parse handshake packet");
     return -1;
-    
+
  out_of_mem:
     SET_MYSQL_ERROR(m,CR_OUT_OF_MEMORY,"HY000","out of memory");
     return -1;
@@ -2046,12 +2281,12 @@ int mi_parse_handshake_packet(MYSQL *m, uint8_t *p, uint8_t *e) {
 }
 
 
-int mimysql_native_password(MYSQL *m) {
+int mimysql_make_native_password(MYSQL *m) {
     MIMYSQL_ENV *env  = m->env;
     const char *pass = m->password;
     char *sa;
     char *aa;
-    
+
     MI_BUF *s = &m->seed;
     int seed_len;
     int pass_len;
@@ -2061,7 +2296,7 @@ int mimysql_native_password(MYSQL *m) {
     uint8_t sha3[21];
     uint8_t apu[41];
     uint8_t sha4[21];
-    
+
 
     seed_len = mi_buf_size(s);
 
@@ -2069,7 +2304,7 @@ int mimysql_native_password(MYSQL *m) {
         mi_log(m,MI_LOG_ERROR,"(mysql_native_password) bad seed len: %d", seed_len);
         return -1;
     }
-        
+
     if(pass == NULL) {
         pass = "";
     }
@@ -2099,39 +2334,99 @@ int mimysql_native_password(MYSQL *m) {
         env->free(sa);
         env->free(aa);
     }
-    
+
     return 0;
 }
 
-
-
-int mi_wait_for_ok(MYSQL *m) {
+int mimysql_native_password_protocol(MYSQL *m) {
     int ret;
-    uint8_t ptype;
-    MI_INBUF *b = &m->inbuf;  
 
-    if(mi_read_next_packet(m) < 0){
+    mi_log(m,MI_LOG_DEBUG,"send native_password reply");
+
+
+    if((ret = mimysql_make_native_password(m)) < 0) {
         return -1;
     }
- 
-    ptype = b->packet_data[0];
-    
-    if(mi_is_ok_packet(b->packet_data, b->packet_end)) {
-        m->packet_type = PACKET_OK;
-        ret = mi_parse_ok_packet(m, b->packet_data, b->packet_end);
-        mi_log(m,MI_LOG_DEBUG,"(waitok) OK server-status: %d,  info=%s", m->server_status, m->info.buf ? (const char*) m->info.buf : "NULL");
-    } else if(mi_is_err_packet(b->packet_data, b->packet_end)) {
-        m->packet_type = PACKET_ERR;
-        ret = mi_parse_err_packet(m, b->packet_data, b->packet_end);
-        mi_log(m,MI_LOG_WARN,"(waitok) got error  packet: error-code: %d,  info=%s", m->errno,  m->error_text);
-        return -1;
-    } else {
-        mi_log(m,MI_LOG_ERROR,"(waitok) illegal reply type: %d", ptype);
-        return -1;
+
+    if((ret = mimysql_generate_handshake_reply(m)) < 0) {
+        if(m->errno == 0) {
+            SET_MYSQL_ERROR(m, CR_UNKOWN_ERROR, sqlstate_unknown,"generating handshake");
+        }
+        return ret;
     }
-    
-    return 1;
+
+    if((ret = mi_write_outbuf(m)) < 0) {
+        return ret;
+    }
+
+    mi_log(m,MI_LOG_DEBUG,"native password handshake reply sent");
+
+    if((ret = mi_wait_for_auth_reply(m)) < 0) {
+        mi_log(m,MI_LOG_ERROR,"login not accept");
+    }
+
+    return ret;
 }
+
+
+int mimysql_old_password_protocol(MYSQL *m) {
+    int ret;
+    char scrambled[SCRAMBLE_LENGTH_323 + 1];
+
+    mi_log(m,MI_LOG_DEBUG,"send old_password reply");
+
+    mi_scramble_323(scrambled, (const char*) m->seed.buf, m->password ? m->password : "");
+
+    if((ret = mimysql_generate_handshake_reply(m)) < 0) {
+        if(m->errno == 0) {
+            SET_MYSQL_ERROR(m, CR_UNKOWN_ERROR, sqlstate_unknown,"generating handshake");
+        }
+        return ret;
+    }
+
+    if((ret = mi_write_outbuf(m)) < 0) {
+        return ret;
+    }
+
+    mi_log(m,MI_LOG_DEBUG,"old_password handshake reply sent");
+
+    if((ret = mi_wait_for_auth_reply(m)) < 0) {
+        mi_log(m,MI_LOG_ERROR,"login not accept");
+    }
+
+    return ret;
+}
+
+
+int mimysql_just_old_password_protocol(MYSQL *m) {
+    int ret;
+     MI_BUF *o = &m->outbuf;
+    char scrambled[SCRAMBLE_LENGTH_323 + 1];
+
+    mi_log(m,MI_LOG_DEBUG,"send just old_password");
+
+    mi_scramble_323(scrambled, (const char*) m->seed.buf, m->password ? m->password : "");
+
+    m->sequence++;
+
+    mi_buf_reset_header(o,m->sequence);
+    mi_buf_add_str_nul(o, scrambled, SCRAMBLE_LENGTH_323);
+    mi_buf_set_length(o);
+
+    if((ret = mi_write_outbuf(m)) < 0) {
+        return ret;
+    }
+
+    mi_log(m,MI_LOG_DEBUG,"old_password handshake reply sent");
+
+    if((ret = mi_wait_for_auth_reply(m)) < 0) {
+        mi_log(m,MI_LOG_ERROR,"login not accept");
+        return -1;
+    }
+
+    return ret;
+}
+
 
 
 
@@ -2150,9 +2445,10 @@ MYSQL *mysql_real_connect(MYSQL *m,
     MI_INBUF *b;
     int err = 0;
     int ret;
+    int just_old_password = 0;
     assert(m->magic == MIMYSQL_MAGIC);
 
-    
+
     if(m->user) env->free((void*)m->user);
     if(m->password) env->free((void*)m->password);
     if(m->database) env->free((void*)m->database);
@@ -2165,10 +2461,10 @@ MYSQL *mysql_real_connect(MYSQL *m,
     m->host = NULL;
     m->socket = NULL;
     m->port = 0;
-    
+
     if(user) {
         m->user = str_dup(m,(char*)user);
-        if(m->user == NULL) goto out_of_mem;        
+        if(m->user == NULL) goto out_of_mem;
     }
     if(password) {
         m->password = str_dup(m,(char*)password);
@@ -2189,7 +2485,7 @@ MYSQL *mysql_real_connect(MYSQL *m,
     if(port) {
         m->port = port;
     }
-    
+
     if(unix_socket) {
         mio = env->connect_unix(m, unix_socket, 0, &err);
         if(mio == NULL) {
@@ -2228,51 +2524,48 @@ MYSQL *mysql_real_connect(MYSQL *m,
         return NULL;
     }
 
-    mi_log(m,MI_LOG_DEBUG,"handlshake parsed: %s  auth-plugin: %s",  m->server_version, m->auth_plugin_name ? m->auth_plugin_name : "NULL");
-    
-    if(m->auth_plugin_name == NULL) {
-        SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"no auth plugin given by server");
-        mi_close_connection(m);
-        return NULL;
-    } else if(strcmp(m->auth_plugin_name, "mysql_native_password") != 0) {
-        SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"do not support auth_plugin: %s", m->auth_plugin_name);
-        mi_close_connection(m);
-        return NULL;        
-    }
+    mi_log(m,MI_LOG_DEBUG,"handshake parsed: %s  auth-plugin: %s",  m->server_version, m->auth_plugin_name ? m->auth_plugin_name : "NULL");
 
-    if(mimysql_native_password(m)) {
-        if(m->errno == 0) {
-            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"native handshake error");
+
+    m->connected = 0;
+
+    just_old_password = 0;
+    do {
+        if(just_old_password) {
+            just_old_password = 0;
+            ret = mimysql_just_old_password_protocol(m);
+        } else if(m->auth_plugin_name == NULL) {
+            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"no auth plugin given by server");
+            mi_close_connection(m);
+            return NULL;
+        } else if(!strcmp(m->auth_plugin_name, "mysql_native_password")) {
+            ret = mimysql_native_password_protocol(m);
+        } else if(!strcmp(m->auth_plugin_name, "old_password")) {
+            ret = mimysql_old_password_protocol(m);
+        } else {
+            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"do not support auth_plugin: %s", m->auth_plugin_name);
+            mi_close_connection(m);
+            return NULL;
         }
-        mi_close_connection(m);
-        return NULL;
-    }
 
-    mi_log(m,MI_LOG_DEBUG,"send reply");
-
-    if(mimysql_generate_handshake_reply(m) < 0) {
-        if(m->errno == 0) {
-            SET_MYSQL_ERROR(m, CR_UNKOWN_ERROR, sqlstate_unknown,"generating handshake");
+        if(ret == MI_AUTH_OK) {
+            m->connected =  1;
+        } else if(ret < 0) {
+            mi_close_connection(m);
+            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"handshake error");
+        } else if(ret == MI_AUTH_SWITCH) {
+            // again.
+        } else if(ret == MI_AUTH_OLD) {
+            just_old_password = 1;
+        } else {
+            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"bad reply: %d", ret);
+            mi_close_connection(m);
+            return NULL;
         }
-        mi_close_connection(m);        
-        return NULL;
-    }
+    } while(!m->connected);
 
-    if((ret = mi_write_outbuf(m)) < 0) {
-        mi_close_connection(m);
-        return NULL;
-    }
-    
-    mi_log(m,MI_LOG_DEBUG,"handlshake reply sent");
-
-    if(mi_wait_for_ok(m) < 0) {
-        mi_log(m,MI_LOG_ERROR,"login not accept");
-        mi_close_connection(m);        
-        return NULL;
-    }
-    
     mi_log(m,MI_LOG_DEBUG,"connected");
-          
+
     m->connected = 1;
     m->state = MI_ST_READY;
     return m->connected ? m : NULL;
@@ -2285,7 +2578,7 @@ MYSQL *mysql_real_connect(MYSQL *m,
 
 
 int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
-    MIMYSQL_ENV *env  = m->env;    
+    MIMYSQL_ENV *env  = m->env;
     MI_INBUF *b = &m->inbuf;
     int ret;
     int i;
@@ -2293,7 +2586,7 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     uint8_t *e;
     char *bufbase;
     void *a;  /* helping for realloc */
-    
+
     if(!(m->connected)) {
         SET_MYSQL_ERROR(m,CR_TCP_CONNECTION,"HY000","not connected");
         mi_log(m,3,"not connected");
@@ -2307,11 +2600,11 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     }
 
     CLEAR_MYSQL_ERROR(m);
-    
+
     m->row_count = 0;
     m->field_count = 0;
     m->res_open = 0;
-    
+
     if(mi_send_com(m, CMD_QUERY, query, length) < 0) {
         mi_log(m,4,"error wring query");
         goto write_error;
@@ -2342,10 +2635,9 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     if(mi_is_err_packet(p,e)) {
         ret = mi_parse_err_packet(m, p, e);
         mi_log(m,MI_LOG_WARN,"query error : error-code: %d,  info=%s", m->errno,  m->error_text);
-        m->state = MI_ST_READY;        
+        m->state = MI_ST_READY;
         return -1;
     }
-
     if(mi_is_eof_packet(p,e)) {
         ret = mi_parse_eof_packet(m, p, e);
         mi_log(m,MI_LOG_ERROR,"query eof?????? : error-code: %d,  info=%s", m->errno,  m->error_text);
@@ -2360,14 +2652,14 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     }
 
     // should be field count
-    
+
     if(mdata_lenc32(&p, e, &m->field_count) <= 0) {
         goto bad_packet;
     }
-    
+
     if(p != e) {
         mi_log(m,3,"query: data after rowcount");
-        goto bad_packet;        
+        goto bad_packet;
     }
 
     if(m->field_count == 0) {
@@ -2377,7 +2669,7 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
 
     m->state = MI_ST_QUERY_FIELDS;
 
-    // GET FIELD VALUES 
+    // GET FIELD VALUES
 
     if(m->fields == NULL) {
         m->max_fields = 16;
@@ -2396,41 +2688,41 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
         if((m->row_lengths = env->alloc(sizeof(uint32_t) * (m->max_fields + 1))) == NULL) {
             goto out_of_mem;
         }
-        
+
     } else if(m->field_count > m->max_fields) {
         m->max_fields = m->field_count;
         if((a = env->realloc(m->fields, sizeof(MYSQL_FIELD) * (m->max_fields + 1))) == NULL) {
-            goto out_of_mem;            
+            goto out_of_mem;
         }
         m->fields = a;
-        
+
         if((a = env->realloc(m->field_offsets, sizeof(MIMYSQL_FIELD_OFFSET) * (m->max_fields + 1))) == NULL) {
             goto out_of_mem;
         }
         m->field_offsets = a;
-        
+
         if((a = env->realloc(m->row_data, sizeof(char *) * (m->max_fields + 1))) == NULL) {
             goto out_of_mem;
         }
         m->row_data = a;
-        
+
         if((a = env->realloc(m->row_data, sizeof(uint32_t) * (m->max_fields + 1))) == NULL) {
             goto out_of_mem;
         }
         m->row_lengths = a;
-        
+
     }
-    
+
     memset((void*) m->fields, 0, sizeof(MYSQL_FIELD) * (m->field_count + 1));
     memset((void*) m->field_offsets, 0, sizeof(MIMYSQL_FIELD_OFFSET) * (m->field_count + 1));
     memset((void*) m->row_data, 0, sizeof(char *) * (m->field_count + 1));
     memset((void*) m->row_lengths, 0, sizeof(uint32_t) * (m->field_count + 1));
-    
+
     mi_buf_reset(&m->field_data_buffer);
 
 
     for(m->field_index = 0; m->field_index < m->field_count; m->field_index++) {
-        
+
         if(mi_read_next_packet(m) < 0){
             mi_log(m,4,"(query) field read error : index=%", m->field_index);
             goto read_error;
@@ -2444,7 +2736,7 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
                                   b->packet_end,
                                   &m->fields[m->field_index],
                                   &m->field_offsets[m->field_index]) < 0) {
-            
+
             goto bad_packet;
         }
     }
@@ -2452,18 +2744,18 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
 
     // get deprectead EOF packet (if needed)
 
-    
+
     if(!(m->client_caps & CLIENT_DEPRECATE_EOF)) {
 
         m->state = MI_ST_QUERY_FIELDS_EOF;
-        
+
         if(mi_read_next_packet(m) < 0){
             goto read_error;
         }
         if(b->packet_size < 1) {
             goto bad_packet;
         }
-        
+
         if(!mi_is_eof_packet(b->packet_data, b->packet_end)) {
             goto packet_out_of_sync;
         }
@@ -2472,7 +2764,7 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     // fix field offsets
 
     bufbase = (char *) m->field_data_buffer.buf;
-    
+
     for(i = 0; i < m->field_count; i++) {
         MYSQL_FIELD *f = &m->fields[i];
         MIMYSQL_FIELD_OFFSET *o = &m->field_offsets[i];
@@ -2494,14 +2786,14 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     m->state = MI_ST_QUERY_ROWS;
     m->res_open = 1;
     m->resp[0].m = m;
-    
+
     return 0;
 
  write_error:
     mi_log(m,4,"write error");
     mi_close_connection(m);
     return -1;
-    
+
 
  read_error:
     mi_log(m,4,"read error");
@@ -2531,7 +2823,7 @@ int mysql_real_query(MYSQL *m,  const char *query, unsigned long length) {
     }
     mi_close_connection(m);
     return -1;
-    
+
 }
 
 
@@ -2547,18 +2839,18 @@ int mi_skip_results(MYSQL *m) {
             mi_close_connection(m);
             return -1;
         }
-        
+
         if(b->packet_size < 1) {
             mi_close_connection(m);
             return -1;
         }
-        
+
         if(mi_is_err_packet(b->packet_data, b->packet_end)) {
             if(mi_parse_err_packet(m,b->packet_data, b->packet_end) < 0)  {
             }
             break;
         }
-        
+
         if(m->client_caps & CLIENT_DEPRECATE_EOF) {
             if(mi_is_okeof_packet(b->packet_data, b->packet_end)) {
                 mi_parse_ok_packet(m,b->packet_data, b->packet_end);
@@ -2573,12 +2865,12 @@ int mi_skip_results(MYSQL *m) {
         m->row_count++;
     }
 
-    
+
     m->state = MI_ST_READY;
     return 0;
 }
 
-                  
+
 
 int mysql_query(MYSQL *m,  const char *query) {
     return mysql_real_query(m, query, strlen(query));
@@ -2605,7 +2897,7 @@ MYSQL_FIELD * mysql_fetch_field_direct(MYSQL_RES * res,
                                        unsigned int fieldnr)
 {
     MYSQL *m = res->m;
-    if(m->state != MI_ST_QUERY_ROWS) {    
+    if(m->state != MI_ST_QUERY_ROWS) {
         return NULL;
     }
     if(fieldnr >= m->field_count) {
@@ -2641,7 +2933,7 @@ MYSQL_ROW mysql_fetch_row(MYSQL_RES *res) {
     int ret;
     uint64_t col_len;
 
-    
+
     if(m->state != MI_ST_QUERY_ROWS) {
         return NULL;
     }
@@ -2649,11 +2941,11 @@ MYSQL_ROW mysql_fetch_row(MYSQL_RES *res) {
     if(!(m->res_open)) {
         return NULL;
     }
-    
+
     if(mi_read_next_packet(m) < 0){
         return NULL;
     }
-    
+
     if(b->packet_size < 1) {
         return NULL;
 
@@ -2666,19 +2958,19 @@ MYSQL_ROW mysql_fetch_row(MYSQL_RES *res) {
         m->res_open = 0;
         return NULL;
     }
-    
+
     if(m->client_caps & CLIENT_DEPRECATE_EOF) {
         if(mi_is_okeof_packet(b->packet_data, b->packet_end)) {
             mi_parse_ok_packet(m,b->packet_data, b->packet_end);
             m->state = MI_ST_READY;
-            m->res_open = 0;            
-            return NULL;            
+            m->res_open = 0;
+            return NULL;
         }
     } else {
         if(mi_is_eof_packet(b->packet_data, b->packet_end)) {
             mi_parse_ok_packet(m,b->packet_data, b->packet_end);
             m->state = MI_ST_READY;
-            m->res_open = 0;            
+            m->res_open = 0;
             return NULL;
         }
     }
@@ -2686,7 +2978,7 @@ MYSQL_ROW mysql_fetch_row(MYSQL_RES *res) {
     p = b->packet_data;
     e = b->packet_end;
     prev = NULL;
-    
+
     for(i=0; i < m->field_count; i++) {
         prev = p;
         ret = mdata_lenc64(&p,e,&col_len);
@@ -2694,7 +2986,7 @@ MYSQL_ROW mysql_fetch_row(MYSQL_RES *res) {
         if(ret < 0) {
             SET_MYSQL_ERROR(m,CR_MALFORMED_PACKET,"HY000","bad lenc");
             mi_log(m,4,"(mysql_fetch_row) bad lenc : %d", ret);
-            return NULL;            
+            return NULL;
         } else if(ret == 0) {
             m->row_data[i] = NULL;
             m->row_lengths[i] = -1;
@@ -2712,7 +3004,7 @@ MYSQL_ROW mysql_fetch_row(MYSQL_RES *res) {
     }
     *p = 0;    // next rows first byte always saved.
     m->row_count++;
-    
+
     return m->row_data;
 }
 
@@ -2726,43 +3018,43 @@ unsigned long mysql_real_escape_string(MYSQL * mysql, char * to, const char * fr
 
 void mysql_free_result(MYSQL_RES *res) {
     // its do nothing here
-    
+
 }
 
 
 
 int mysql_ping(MYSQL *m) {
-    
+
     if(!m->connected) {
         return -1;
     }
-    
+
     if(mi_send_com(m, CMD_PING, NULL, 0) < 0) {
         mi_log(m,MI_LOG_ERROR,"could not send ping");
-        mi_close_connection(m);        
+        mi_close_connection(m);
         return -1;
     }
 
     if(mi_wait_for_ok(m) < 0) {
         mi_log(m,MI_LOG_ERROR,"could not get pong");
-        mi_close_connection(m);        
+        mi_close_connection(m);
         return -1;
     }
-    
+
     return 0;
 }
 
 
 const char * mysql_stat(MYSQL * m) {
     MI_INBUF *b = &m->inbuf;
-    
+
     if(! m->connected) {
         return NULL;
     }
-    
+
     if(mi_send_com(m, CMD_STATISTICS, NULL, 0) < 0) {
         mi_log(m,MI_LOG_ERROR,"could not send stats");
-        mi_close_connection(m);        
+        mi_close_connection(m);
         return NULL;
     }
 
@@ -2772,7 +3064,7 @@ const char * mysql_stat(MYSQL * m) {
         mi_close_connection(m);
         return NULL;
     }
-    
+
     // mi_display_packet(m->env, b->packet_data, b->packet_end);
 
     return (const char *) b->packet_data;
@@ -2783,7 +3075,7 @@ int mysql_errno(MYSQL *m) {
     return m->errno;
 }
 
- 
+
 const char * mysql_error(MYSQL *m) {
     return m->error_text;
 }
