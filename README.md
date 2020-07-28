@@ -1,6 +1,8 @@
 # mimysql - Small MySQL/MariaDB client lib in C
 
-Small MySQL/MariaDB client with features and limitions
+Small MySQL/MariaDB client library in C made 
+to embedded to projects which have their own
+io + memory-handling libraries.
 
 ## Limitations
 
