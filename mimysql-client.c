@@ -2531,6 +2531,7 @@ MYSQL *mysql_real_connect(MYSQL *m,
 
     just_old_password = 0;
     do {
+
         if(just_old_password) {
             just_old_password = 0;
             ret = mimysql_just_old_password_protocol(m);
@@ -2547,6 +2548,8 @@ MYSQL *mysql_real_connect(MYSQL *m,
             mi_close_connection(m);
             return NULL;
         }
+
+        mi_log(m, MI_LOG_DEBUG, "auth result: %d", ret);
 
         if(ret == MI_AUTH_OK) {
             m->connected =  1;
