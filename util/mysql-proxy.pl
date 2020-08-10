@@ -296,7 +296,7 @@ my %states = (
 		$cap = $cap2 << 32 | $cap;
 	    }
 	    
-	    print " (S>C) handshanke: proto=$pversion, server='$sversion',connection_id=$conid  " .
+	    print " (S>C) handshanke: proto=$pversion, server='$sversion',connection_id=$conid, collation=$col, " .
 		"$cap : dep-eof=$deprecate_eof track=$session_track, ext=$mariadb_ext, client-mysql=$client_mysql\n";
 
 	    print " (S>C) caps: " . show_caps($cap) . "\n";
@@ -662,7 +662,7 @@ sub parse_ok_packet {
     return unless length($p) >= 3;
 
     my $c = ord($p);
-    return unless $c == 0x00 || $c == 0XFE;
+    return unless $c == 0x00 || $c == 0XxE;
 
     my $rows;
     my $insert_id;
