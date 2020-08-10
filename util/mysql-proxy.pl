@@ -12,6 +12,7 @@
 use strict;
 use Socket;
 use IO::Socket::UNIX;
+use IO::Socket::INET;
 use IO::Select;
 use POSIX ":sys_wait_h";
 use Getopt::Long;
@@ -27,36 +28,36 @@ my $deps = 0x01000000;
 
 
 use constant {
-    CLIENT_MYSQL            => 1,    #  (1 << 1) mysql/old mariadb server/client 
-    CLIENT_FOUND_ROWS       => 2,    #  (1 << 2)Found instead of affected rows 
-    CLIENT_LONG_FLAG        => 4,    #  (1 << 3)Get all column flags 
-    CLIENT_CONNECT_WITH_DB  => 8,    #  (1 << 4)One can specify db on connect 
-    CLIENT_NO_SCHEMA        => 16,   #  (1 << 5)Don't allow database.table.column 
-    CLIENT_COMPRESS         => 32,   #  (1 << 6)Can use compression protocol 
-    CLIENT_ODBC             => 64,   #  (1 << 7)Odbc client 
-    CLIENT_LOCAL_FILES      => 128,  #  (1 << 8)Can use LOAD DATA LOCAL 
-    CLIENT_IGNORE_SPACE     => 256,  #  (1 << 9)Ignore spaces before '(' 
-    CLIENT_PROTOCOL_41      => 512,  #  (1 << 10)New 4.1 protocol 
-    CLIENT_INTERACTIVE      => 1024, #  (1 << 11)This is an interactive client 
-    CLIENT_SSL              => 2048, #  (1 << 12)Switch to SSL after handshake 
-    CLIENT_IGNORE_SIGPIPE   => 4096, #  (1 << 13)IGNORE sigpipes 
-    CLIENT_TRANSACTIONS     => 8192, #  Client knows about transactions 
-    CLIENT_RESERVED         => 16384,      #  Old flag for 4.1 protocol  
-    CLIENT_SECURE_CONNECTION => 32768,     #  New 4.1 authentication 
-    CLIENT_MULTI_STATEMENTS  => (1 << 16), # Enable/disable multi-stmt support 
-    CLIENT_MULTI_RESULTS     => (1 << 17), # Enable/disable multi-results 
-    CLIENT_PS_MULTI_RESULTS  => (1 << 18), # Multi-results in PS-protocol 
-    CLIENT_PLUGIN_AUTH       => (1 << 19), # Client supports plugin authentication 
-    CLIENT_CONNECT_ATTRS     => (1 << 20), # Client supports connection attributes 
+    CLIENT_MYSQL            => 1,    #  (1 << 1) mysql/old mariadb server/client
+    CLIENT_FOUND_ROWS       => 2,    #  (1 << 2)Found instead of affected rows
+    CLIENT_LONG_FLAG        => 4,    #  (1 << 3)Get all column flags
+    CLIENT_CONNECT_WITH_DB  => 8,    #  (1 << 4)One can specify db on connect
+    CLIENT_NO_SCHEMA        => 16,   #  (1 << 5)Don't allow database.table.column
+    CLIENT_COMPRESS         => 32,   #  (1 << 6)Can use compression protocol
+    CLIENT_ODBC             => 64,   #  (1 << 7)Odbc client
+    CLIENT_LOCAL_FILES      => 128,  #  (1 << 8)Can use LOAD DATA LOCAL
+    CLIENT_IGNORE_SPACE     => 256,  #  (1 << 9)Ignore spaces before '('
+    CLIENT_PROTOCOL_41      => 512,  #  (1 << 10)New 4.1 protocol
+    CLIENT_INTERACTIVE      => 1024, #  (1 << 11)This is an interactive client
+    CLIENT_SSL              => 2048, #  (1 << 12)Switch to SSL after handshake
+    CLIENT_IGNORE_SIGPIPE   => 4096, #  (1 << 13)IGNORE sigpipes
+    CLIENT_TRANSACTIONS     => 8192, #  Client knows about transactions
+    CLIENT_RESERVED         => 16384,      #  Old flag for 4.1 protocol
+    CLIENT_SECURE_CONNECTION => 32768,     #  New 4.1 authentication
+    CLIENT_MULTI_STATEMENTS  => (1 << 16), # Enable/disable multi-stmt support
+    CLIENT_MULTI_RESULTS     => (1 << 17), # Enable/disable multi-results
+    CLIENT_PS_MULTI_RESULTS  => (1 << 18), # Multi-results in PS-protocol
+    CLIENT_PLUGIN_AUTH       => (1 << 19), # Client supports plugin authentication
+    CLIENT_CONNECT_ATTRS     => (1 << 20), # Client supports connection attributes
     CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA => (1 << 21),
     CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS => (1 << 22),
     CLIENT_SESSION_TRACK => (1 << 23),
     CLIENT_DEPRECATE_EOF => (1 << 24),
     CLIENT_PROGRESS_OBSOLETE =>  (1 << 29),
-    LIENT_SSL_VERIFY_SERVER_CERT =>  (1 << 30), 
+    LIENT_SSL_VERIFY_SERVER_CERT =>  (1 << 30),
     CLIENT_REMEMBER_OPTIONS => (1 << 31),
-    MARIADB_CLIENT_FLAGS_MASK => 0xffffffff00000000,  # MariaDB extended capability flags 
-    MARIADB_CLIENT_PROGRESS => (1 << 32), # Client support progress indicator 
+    MARIADB_CLIENT_FLAGS_MASK => 0xffffffff00000000,  # MariaDB extended capability flags
+    MARIADB_CLIENT_PROGRESS => (1 << 32), # Client support progress indicator
     MARIADB_CLIENT_COM_MULTI => (1 << 33),
     MARIADB_CLIENT_STMT_BULK_OPERATIONS => (1 << 34),
 };
@@ -73,8 +74,8 @@ use constant {
 };
 
 use constant {
-     SERVER_STATUS_IN_TRANS             =>      1,	# Transaction has started 
-     SERVER_STATUS_AUTOCOMMIT           =>      2,	# Server in auto_commit mode 
+     SERVER_STATUS_IN_TRANS             =>      1,	# Transaction has started
+     SERVER_STATUS_AUTOCOMMIT           =>      2,	# Server in auto_commit mode
      SERVER_MORE_RESULTS_EXIST          =>      8,
      SERVER_QUERY_NO_GOOD_INDEX_USED    =>     16,
      SERVER_QUERY_NO_INDEX_USED         =>     32,
@@ -93,35 +94,35 @@ use constant {
 use constant {
      COM_SLEEP =>                  0,
      COM_QUIT =>                   1,
-     COM_INIT_DB =>                2, 
-     COM_QUERY =>                  3, 
-     COM_FIELD_LIST =>             4, 
-     COM_CREATE_DB =>              5, 
-     COM_DROP_DB =>                6, 
-     COM_REFRESH =>                7, 
-     COM_SHUTDOWN =>               8, 
-     COM_STATISTICS =>             9, 
-     COM_PROCESS_INFO =>          10, 
-     COM_CONNECT =>               11, 
-     COM_PROCESS_KILL =>          12, 
-     COM_DEBUG =>                 13, 
-     COM_PING =>                  14, 
-     COM_TIME =>                  15, 
-     COM_DELAYED_INSERT =>        16, 
-     COM_CHANGE_USER =>           17, 
-     COM_BINLOG_DUMP =>           18, 
-     COM_TABLE_DUMP =>            19, 
-     COM_CONNECT_OUT =>           20, 
-     COM_REGISTER_SLAVE =>        21, 
-     COM_STMT_PREPARE =>          22, 
-     COM_STMT_EXECUTE =>          23, 
-     COM_STMT_SEND_LONG_DATA =>   24, 
-     COM_STMT_CLOSE =>            25, 
-     COM_STMT_RESET =>            26, 
-     COM_SET_OPTION =>            27, 
-     COM_STMT_FETCH =>            28, 
-     COM_DAEMON =>                29, 
-     COM_UNSUPPORTED =>           30, 
+     COM_INIT_DB =>                2,
+     COM_QUERY =>                  3,
+     COM_FIELD_LIST =>             4,
+     COM_CREATE_DB =>              5,
+     COM_DROP_DB =>                6,
+     COM_REFRESH =>                7,
+     COM_SHUTDOWN =>               8,
+     COM_STATISTICS =>             9,
+     COM_PROCESS_INFO =>          10,
+     COM_CONNECT =>               11,
+     COM_PROCESS_KILL =>          12,
+     COM_DEBUG =>                 13,
+     COM_PING =>                  14,
+     COM_TIME =>                  15,
+     COM_DELAYED_INSERT =>        16,
+     COM_CHANGE_USER =>           17,
+     COM_BINLOG_DUMP =>           18,
+     COM_TABLE_DUMP =>            19,
+     COM_CONNECT_OUT =>           20,
+     COM_REGISTER_SLAVE =>        21,
+     COM_STMT_PREPARE =>          22,
+     COM_STMT_EXECUTE =>          23,
+     COM_STMT_SEND_LONG_DATA =>   24,
+     COM_STMT_CLOSE =>            25,
+     COM_STMT_RESET =>            26,
+     COM_SET_OPTION =>            27,
+     COM_STMT_FETCH =>            28,
+     COM_DAEMON =>                29,
+     COM_UNSUPPORTED =>           30,
      COM_RESET_CONNECTION =>      31,
      COM_STMT_BULK_EXECUTE =>    250,
 
@@ -134,13 +135,13 @@ use constant {
      LENC_B3   => 0xFD,
      LENC_B8   => 0xFE,
      LENC_EOF  => 0xFF,
-     
+
 };
 
 my @server_status = (
-    'IN_TRANS',                    #  0=>      1,	# Transaction has started 
+    'IN_TRANS',                    #  0=>      1,	# Transaction has started
     'AUTOCOMMIT',                  #  1=>      2,	# Server in auto_commit mode
-    'STATUS4',                     #  2=>      4,	
+    'STATUS4',                     #  2=>      4,
     'MORE_RESULTS_EXIST',          #  3=>      8,
     'QUERY_NO_GOOD_INDEX_USED',    #  4=>     16,
     'QUERY_NO_INDEX_USED',         #  5=>     32,
@@ -158,39 +159,39 @@ my @server_status = (
 
 
 my @caps = (
-    'CLIENT_MYSQL',                          # => 1,    #  mysql/old mariadb server/client 
-    'CLIENT_FOUND_ROWS',                     # => 2,    #  Found instead of affected rows 
-    'CLIENT_LONG_FLAG',                      # => 4,    #  Get all column flags 
-    'CLIENT_CONNECT_WITH_DB',                # => 8,    #  One can specify db on connect 
-    'CLIENT_NO_SCHEMA',                      # => 16,   #  Don't allow database.table.column 
-    'CLIENT_COMPRESS',                       # => 32,   #  Can use compression protocol 
-    'CLIENT_ODBC',                           # => 64,   #  Odbc client 
-    'CLIENT_LOCAL_FILES',                    # => 128,  #  Can use LOAD DATA LOCAL 
-    'CLIENT_IGNORE_SPACE',                   # => 256,  #  Ignore spaces before '(' 
-    'CLIENT_PROTOCOL_41',                    # => 512,  #  New 4.1 protocol 
-    'CLIENT_INTERACTIVE',                    # => 1024, #  This is an interactive client 
-    'CLIENT_SSL',                            # => 2048, #  Switch to SSL after handshake 
-    'CLIENT_IGNORE_SIGPIPE',                 # => 4096, #  IGNORE sigpipes 
-    'CLIENT_TRANSACTIONS',                   # => 8192, #  Client knows about transactions 
-    'CLIENT_RESERVED',                       # => 16384,      #  Old flag for 4.1 protocol  
-    'CLIENT_SECURE_CONNECTION',              #  => 32768,     #  New 4.1 authentication 
-    'CLIENT_MULTI_STATEMENTS',               #  => (1 << 16), # Enable/disable multi-stmt support 
-    'CLIENT_MULTI_RESULTS',                  #  => (1 << 17), # Enable/disable multi-results 
-    'CLIENT_PS_MULTI_RESULTS',               #  => (1 << 18), # Multi-results in PS-protocol 
-    'CLIENT_PLUGIN_AUTH',                    #  => (1 << 19), # Client supports plugin authentication 
-    'CLIENT_CONNECT_ATTRS',                  #  => (1 << 20), # Client supports connection attributes 
+    'CLIENT_MYSQL',                          # => 1,    #  mysql/old mariadb server/client
+    'CLIENT_FOUND_ROWS',                     # => 2,    #  Found instead of affected rows
+    'CLIENT_LONG_FLAG',                      # => 4,    #  Get all column flags
+    'CLIENT_CONNECT_WITH_DB',                # => 8,    #  One can specify db on connect
+    'CLIENT_NO_SCHEMA',                      # => 16,   #  Don't allow database.table.column
+    'CLIENT_COMPRESS',                       # => 32,   #  Can use compression protocol
+    'CLIENT_ODBC',                           # => 64,   #  Odbc client
+    'CLIENT_LOCAL_FILES',                    # => 128,  #  Can use LOAD DATA LOCAL
+    'CLIENT_IGNORE_SPACE',                   # => 256,  #  Ignore spaces before '('
+    'CLIENT_PROTOCOL_41',                    # => 512,  #  New 4.1 protocol
+    'CLIENT_INTERACTIVE',                    # => 1024, #  This is an interactive client
+    'CLIENT_SSL',                            # => 2048, #  Switch to SSL after handshake
+    'CLIENT_IGNORE_SIGPIPE',                 # => 4096, #  IGNORE sigpipes
+    'CLIENT_TRANSACTIONS',                   # => 8192, #  Client knows about transactions
+    'CLIENT_RESERVED',                       # => 16384,      #  Old flag for 4.1 protocol
+    'CLIENT_SECURE_CONNECTION',              #  => 32768,     #  New 4.1 authentication
+    'CLIENT_MULTI_STATEMENTS',               #  => (1 << 16), # Enable/disable multi-stmt support
+    'CLIENT_MULTI_RESULTS',                  #  => (1 << 17), # Enable/disable multi-results
+    'CLIENT_PS_MULTI_RESULTS',               #  => (1 << 18), # Multi-results in PS-protocol
+    'CLIENT_PLUGIN_AUTH',                    #  => (1 << 19), # Client supports plugin authentication
+    'CLIENT_CONNECT_ATTRS',                  #  => (1 << 20), # Client supports connection attributes
     'CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA', #  => (1 << 21),
     'CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS',   #  => (1 << 22),
     'CLIENT_SESSION_TRACK',                  #  => (1 << 23),
-    'CLIENT_DEPRECATE_EOF',                  #  => (1 << 24), 
-    'CLIENT_25',                             #  => (1 << 25), 
-    'CLIENT_26',                             #  => (1 << 26), 
-    'CLIENT_27',                             #  => (1 << 27), 
-    'CLIENT_28',                             #  => (1 << 28), 
+    'CLIENT_DEPRECATE_EOF',                  #  => (1 << 24),
+    'CLIENT_25',                             #  => (1 << 25),
+    'CLIENT_26',                             #  => (1 << 26),
+    'CLIENT_27',                             #  => (1 << 27),
+    'CLIENT_28',                             #  => (1 << 28),
     'CLIENT_PROGRESS_OBSOLETE',              #  => (1 << 29),
-    'CLIENT_SSL_VERIFY_SERVER_CERT',         #  => (1 << 30), 
+    'CLIENT_SSL_VERIFY_SERVER_CERT',         #  => (1 << 30),
     'CLIENT_REMEMBER_OPTIONS',               #  => (1 << 31),
-    'MARIADB_CLIENT_PROGRESS',               #  => (1 << 32), # Client support progress indicator 
+    'MARIADB_CLIENT_PROGRESS',               #  => (1 << 32), # Client support progress indicator
     'MARIADB_CLIENT_COM_MULTI',              #  => (1 << 33),
     'MARIADB_CLIENT_STMT_BULK_OPERATIONS' => #  => (1 << 34),
     );
@@ -228,35 +229,35 @@ sub show_caps {
 my @com_array = (
     [ "COM_SLEEP",                 0, ],
     [ "COM_QUIT",                  1, ],
-    [ "COM_INIT_DB",               2, ], 
-    [ "COM_QUERY" ,                3, \&parse_com_query, ], 
-    [ "COM_FIELD_LIST",            4, ], 
-    [ "COM_CREATE_DB",             5, ], 
-    [ "COM_DROP_DB",               6, ], 
-    [ "COM_REFRESH",               7, ], 
-    [ "COM_SHUTDOWN",              8, ], 
-    [ "COM_STATISTICS",            9, ], 
-    [ "COM_PROCESS_INFO",         10, ], 
-    [ "COM_CONNECT",              11, ], 
-    [ "COM_PROCESS_KILL",         12, ], 
-    [ "COM_DEBUG",                13, ], 
-    [ "COM_PING",                 14, ], 
-    [ "COM_TIME",                 15, ], 
-    [ "COM_DELAYED_INSERT",       16, ], 
-    [ "COM_CHANGE_USER",          17, ], 
-    [ "COM_BINLOG_DUMP",          18, ], 
-    [ "COM_TABLE_DUMP",           19, ], 
-    [ "COM_CONNECT_OUT",          20, ], 
-    [ "COM_REGISTER_SLAVE",       21, ], 
-    [ "COM_STMT_PREPARE",         22, ], 
-    [ "COM_STMT_EXECUTE",         23, ], 
-    [ "COM_STMT_SEND_LONG_DATA",  24, ], 
-    [ "COM_STMT_CLOSE",           25, ], 
-    [ "COM_STMT_RESET",           26, ], 
-    [ "COM_SET_OPTION",           27, ], 
-    [ "COM_STMT_FETCH",           28, ], 
-    [ "COM_DAEMON",               29, ], 
-    [ "COM_UNSUPPORTED",          30, ], 
+    [ "COM_INIT_DB",               2, ],
+    [ "COM_QUERY" ,                3, \&parse_com_query, ],
+    [ "COM_FIELD_LIST",            4, ],
+    [ "COM_CREATE_DB",             5, ],
+    [ "COM_DROP_DB",               6, ],
+    [ "COM_REFRESH",               7, ],
+    [ "COM_SHUTDOWN",              8, ],
+    [ "COM_STATISTICS",            9, ],
+    [ "COM_PROCESS_INFO",         10, ],
+    [ "COM_CONNECT",              11, ],
+    [ "COM_PROCESS_KILL",         12, ],
+    [ "COM_DEBUG",                13, ],
+    [ "COM_PING",                 14, ],
+    [ "COM_TIME",                 15, ],
+    [ "COM_DELAYED_INSERT",       16, ],
+    [ "COM_CHANGE_USER",          17, ],
+    [ "COM_BINLOG_DUMP",          18, ],
+    [ "COM_TABLE_DUMP",           19, ],
+    [ "COM_CONNECT_OUT",          20, ],
+    [ "COM_REGISTER_SLAVE",       21, ],
+    [ "COM_STMT_PREPARE",         22, ],
+    [ "COM_STMT_EXECUTE",         23, ],
+    [ "COM_STMT_SEND_LONG_DATA",  24, ],
+    [ "COM_STMT_CLOSE",           25, ],
+    [ "COM_STMT_RESET",           26, ],
+    [ "COM_SET_OPTION",           27, ],
+    [ "COM_STMT_FETCH",           28, ],
+    [ "COM_DAEMON",               29, ],
+    [ "COM_UNSUPPORTED",          30, ],
     [ "COM_RESET_CONNECTION",     31, ],
     );
 @com_array[250] = [ "COM_STMT_BULK_EXECUTE",  250 ];
@@ -267,15 +268,15 @@ my $conn_id;
 
 
 my %states = (
-    
+
     WAIT_HANDSHAKE  =>  {
 	'name' => WAIT_HANDSHAKE,
-	
+
 	'client' => sub {
 	    my ($st,$p,$seq) = @_;
 	    print " (C>S)($st->{state}) illegal packet in handshake\n";
 	},
-	
+
 	'server' => sub {
 	    my ($st,$p,$seq) = @_;
 	    my ($pversion, $sversion, $conid, $seed, $pad0, $cap0, $col, $flags,$cap1,$auth_data_len,$filler6,$r) =
@@ -285,7 +286,7 @@ my %states = (
 	    my $session_track  = ($cap & CLIENT_SESSION_TRACK) ? 1 : 0;
 	    my $client_mysql   = ($cap & CLIENT_MYSQL) ? 1 : 0;
 	    my $plugin_auth    = ($cap & CLIENT_PLUGIN_AUTH) ? 1 : 0;
-	    my $deprecate_eof  = ($cap & CLIENT_DEPRECATE_EOF) ? 1 : 0;	    
+	    my $deprecate_eof  = ($cap & CLIENT_DEPRECATE_EOF) ? 1 : 0;
 	    my $mariadb_ext    = $client_mysql ? 0 : 1;
 
 	    if($st->{client_mysql}) {
@@ -295,7 +296,7 @@ my %states = (
 		($cap2,$r) = unpack("VA*",$r);
 		$cap = $cap2 << 32 | $cap;
 	    }
-	    
+
 	    print " (S>C) handshanke: proto=$pversion, server='$sversion',connection_id=$conid, collation=$col, " .
 		"$cap : dep-eof=$deprecate_eof track=$session_track, ext=$mariadb_ext, client-mysql=$client_mysql\n";
 
@@ -309,7 +310,7 @@ my %states = (
     WAIT_HANDSHAKE_REPLY  =>  {
 
 	'name' => WAIT_HANDSHAKE_REPLY,
-	
+
 	'client' => sub {
 	    my ($st,$p,$seq) = @_;
 
@@ -320,9 +321,9 @@ my %states = (
 	    my $session_track  = $st->{session_track} = ($cap & CLIENT_SESSION_TRACK) ? 1 : 0;
 	    my $client_mysql   = $st->{client_mysql}  = ($cap & CLIENT_MYSQL)         ? 1 : 0;
 	    my $plugin_auth    = $st->{plugin_auth}   = ($cap & CLIENT_PLUGIN_AUTH)   ? 1 : 0;
-	    my $deprecate_eof  = $st->{deprecate_eof} = ($cap & CLIENT_DEPRECATE_EOF) ? 1 : 0;	    
+	    my $deprecate_eof  = $st->{deprecate_eof} = ($cap & CLIENT_DEPRECATE_EOF) ? 1 : 0;
 	    my $mariadb_ext    = $st->{mariadb_ext}   = ($st->{client_mysql}) ? 0 : 1;
-	    
+
 	    $st->{cap} = $cap;
 	    $st->{username} = $username;
 
@@ -332,7 +333,7 @@ my %states = (
 
 	    print " (S>C) caps: " . show_caps($cap) . "\n";
 	    # print " (S>C) caps: " . Dumper($st);
-		
+
 	    set_state($st,"WAIT_HANDSHAKE_STATUS");
 	},
 	'server' => sub {
@@ -344,7 +345,7 @@ my %states = (
 
     WAIT_HANDSHAKE_STATUS  =>  {
 	'name' => WAIT_HANDSHAKE_STATUS,
-	
+
 	'client' => sub {
 	    my ($st,$p,$seq) = @_;
 	    print " (C>S)($st->{state}) illegal packet in handshake\n";
@@ -357,18 +358,18 @@ my %states = (
 		parse_ok_packet($st,$p);
 		set_state($st,WAIT_COM);
 	    } elsif($c == PACKET_ERR) {
-		parse_err_packet($st,$p);	
+		parse_err_packet($st,$p);
 	    } else {
-		set_state($st,WAIT_HANDSHAKE_REPLY);		
+		set_state($st,WAIT_HANDSHAKE_REPLY);
 
 	    }
 	},
     },
 
     WAIT_COM  =>  {
-	
+
 	'name' => WAIT_COM,
-	
+
 	'client' => sub {
 	    my ($st,$p,$seq) = @_;
 
@@ -385,18 +386,18 @@ my %states = (
 		print " (C>S)($st->{state}) uknown com($com)\n";
 	    }
 	},
-	    
+
 	'server' => sub {
 	    my ($st,$p,$seq) = @_;
 	    my $c = ord(substr($p,0,1));
-	    printf(" (S>C)($st->{state}) com reply %02x\n", $c);	    
+	    printf(" (S>C)($st->{state}) com reply %02x\n", $c);
 	},
     },
 
     QUERY_WAIT_RESPONSE  =>  {
-	
+
 	'name' => QUERY_WAIT_RESPONSE,
-	
+
 	'client' => sub {
 	    my ($st,$p,$seq) = @_;
 
@@ -435,7 +436,7 @@ my %states = (
 
 	    $st->{cols} = $cols;
 	    $st->{col_index} = 0;
-	    $st->{row_count} = 0;	    
+	    $st->{row_count} = 0;
 
 	    print " (C>S)($st->{state}) RESULTSET: $cols dep-eof($st->{deprecate_eof})\n";
 
@@ -445,9 +446,9 @@ my %states = (
     },
 
     QUERY_WAIT_COLS  =>  {
-	
+
 	'name' => QUERY_WAIT_COLS,
-	
+
 	'client' => sub {
 	    my ($st,$p,$seq) = @_;
 
@@ -477,7 +478,7 @@ my %states = (
 		set_state($st,QUERY_WAIT_ROWS);
 		return;
 	    }
-	    
+
 	    if(is_err_packet($p)) {
 		print "  (S>C)($st->{state}) ($c) COLUMN ERR ($st->{col_index}/$st->{cols}) eof($st->{deprecate_eof})\n";
 		parse_err_packet($st,$p);
@@ -507,12 +508,12 @@ my %states = (
     },
 
     QUERY_WAIT_COLS_EOF  =>  {
-	
+
 	'name' => QUERY_WAIT_COLS_EOF,
-	
+
         'client' => sub {
 	    my ($st,$p,$seq) = @_;
-		
+
 	    my $com = ord($p);
 	    my $c = @com_array[$com];
 	    if($c) {
@@ -526,7 +527,7 @@ my %states = (
 		print " (C>S)($st->{state}) uknown com($com)\n";
 	    }
 	},
-        'server' => sub { 
+        'server' => sub {
 	    my ($st,$p,$seq) = @_;
 	    my $com = ord($p);
 	    if(is_eof_packet($p) and length($p) < 0xffffff) {
@@ -542,16 +543,16 @@ my %states = (
 	},
 
     },
-    
-    
+
+
 
     QUERY_WAIT_ROWS  =>  {
-	
+
 	'name' => QUERY_WAIT_ROWS,
-	
+
         'client' => sub {
 		my ($st,$p,$seq) = @_;
-		
+
 	    my $com = ord(substr($p,0,1));
 	    my $c = @com_array[$com];
 	    if($c) {
@@ -565,13 +566,13 @@ my %states = (
 		print " (C>S)($st->{state}) uknown com($com)\n";
 	    }
 	},
-        'server' => sub { 
+        'server' => sub {
 	    my ($st,$p,$seq) = @_;
 	    my $com = ord($p);
 
 	    if(not $st->{deprecate_eof} and is_eof_packet($p)) {
 		print " (S>C)($st->{state}) EOF ($com) rows($st->{row_count})\n";
-		parse_eof_packet($st,$p);		
+		parse_eof_packet($st,$p);
 	    } elsif($st->{deprecate_eof} and is_ok_or_eof_packet($p) and length($p) < 0xffffff) {
 		print " (S>C)($st->{state}) OK ($com) rows($st->{row_count})\n";
 		parse_ok_packet($st,$p);
@@ -595,8 +596,8 @@ my %states = (
 	},
 
     },
-    
-    
+
+
     );
 
 sub quote {
@@ -662,7 +663,7 @@ sub parse_ok_packet {
     return unless length($p) >= 3;
 
     my $c = ord($p);
-    return unless $c == 0x00 || $c == 0XxE;
+    return unless $c == 0x00 || $c == 0xFE;
 
     my $rows;
     my $insert_id;
@@ -689,7 +690,7 @@ sub parse_ok_packet {
     $st->{info} = $info;
 
     my $ss = show_server_status($status);
-    
+
     print "  ($st->{state}) OK_PACKET com($c) rows($rows) insert_id($insert_id) server_status($status) warnings($warnings) : $ss : $info\n";
     return 1;
 }
@@ -707,8 +708,8 @@ sub parse_eof_packet {
     $st->{server_status} = $status;
     $st->{warnings} = $warnings;
 
-    my $ss = show_server_status($status);    
-    
+    my $ss = show_server_status($status);
+
     print "  ($st->{state}) EOF_PACKET warnings($warnings) status($status): $ss\n";
     return 1;
 }
@@ -735,7 +736,7 @@ sub parseLenc {
     }
     if($c == 0xFD) {
 	my $s = substr($p,$off+1,3);
-	return unless length($s) == 3;	
+	return unless length($s) == 3;
 	my ($val0,$val1) = unpack("vC",$s);
 	return ($val1 << 16 | $val0,substr($p,$off+4),$c);
     }
@@ -775,18 +776,39 @@ sub set_state {
 }
 
 my $readsize = 4 * 1024;
-my $sock = "/tmp/mysql2.sock";
-my $dst = "/tmp/mysql.sock";
+
+my $default_client_socket = "/tmp/mysql2.sock";
+my $default_master_socket = "/tmp/mysql.sock";
+
+
+my $cli;
+my $dst;
+
 my %children;
 my $verbose = 0;
 my $nofork = 0;
 
 GetOptions(
     'v|verbose+' => \$verbose,
-    'M|master-socket=s' => \$dst,
-    'C|client-socket=s' => \$sock,
+    'M|master-socket=s' =>  sub { $dst = init_master_unix($_[1]); },
+    'C|client-socket=s' =>  sub { $cli = init_client_unix($_[1]); },
+    'T|tcp-port=s' =>       sub { $cli = init_client_tcp($_[1]); },
+    'H|tcp-host=s' =>       sub { $dst = init_master_tcp($_[1]); },
     'n|no-fork' => \$nofork,
     ) or die "bad opts";
+
+
+
+$cli = init_client_unix($default_client_socket) unless $cli;
+$dst = init_master_unix($default_master_socket) unless $dst;
+
+
+die "not client" unless $cli->{kind} eq 'client';
+die "not master" unless $dst->{kind} eq 'master';
+
+
+print "client: $cli->{str}\n";
+print "master: $dst->{str}\n";
 
 
 $SIG{CHLD} = sub {
@@ -801,30 +823,27 @@ $SIG{CHLD} = sub {
 
 # do something that forks...
 
-if ( -S $sock ) {
-    print("unlink my socket ($sock)\n") if $verbose;
-    unlink($sock);
-}
+
+$cli->{pre}->();
+
+my $ss = $cli->{open}->();
 
 
-my $ss = IO::Socket::UNIX->new( Type => SOCK_STREAM,
-				 Local => $sock,
-				 Listen => 20) or die "cannot create server socket: $!";
-
+die "no client socket" unless $ss;
 
 
 for(;;) {
-    
+
     my $c = $ss->accept();
-    next unless $c;    
-    
+    next unless $c;
+
     print "new connection: $c\n";
 
     if($nofork) {
 	run_child_do($c);
     } else {
 	my $child = fork();
-	
+
 	if(not defined($child)) {
 	    die "cannot create child: $!\n";
 	}
@@ -833,11 +852,125 @@ for(;;) {
 	    exit(0);
 	}
     }
-    $c = undef;    
+    $c = undef;
+}
+
+
+exit 0;
+
+###############################################################################################################
+
+sub init_client_unix {
+    my ($socket) = @_;
+
+
+    return {
+	'kind' => 'client',
+	'str' => "client unix $socket",
+	'type' => 'unix',
+        'socket' => $socket,
+
+	'open' =>
+	    sub {
+		my $ss = IO::Socket::UNIX->new( Type => SOCK_STREAM,
+						Local => $socket,
+						Listen => 20) or die "cannot create server socket: $!";
+		return $ss;
+
+	},
+	'close' =>  sub {
+		if(-S $socket ) {
+		    print("unlink my socket ($socket)\n") if $verbose;
+		    unlink($socket);
+		}
+	},
+	'pre' =>  sub {
+		if(-S $socket ) {
+		    print("unlink my socket ($socket)\n") if $verbose;
+		    unlink($socket);
+		}
+	}
+    };
+}
+
+
+sub init_client_tcp {
+    my ($port) = @_;
+
+    die "bad port: $port" unless defined(int($port)) and int($port) > 0;
+    $port = int($port);
+
+    return {
+	'kind' => 'client',
+	'str' => "client tcp '$port'",
+	'type' => 'tcp',
+	'port' => $port,
+	'open' =>
+	    sub {
+		my $ss = IO::Socket::INET->new( Type => SOCK_STREAM,
+						Proto => "tcp",
+						LocalPort => $port,
+						Listen => 20) or die "cannot create server socket: $!";
+		return $ss;
+
+	},
+	'close' =>  sub { },
+	'pre' => sub {	},
+
+    };
 }
 
 
 
+
+sub init_master_unix {
+    my ($socket) = @_;
+
+
+    return {
+	'kind' => 'master',
+	'str' => "master unix $socket",
+	'type' => 'unix',
+	'socket' => $socket,
+	'open' =>  sub {
+		my $m =  IO::Socket::UNIX->new( Type => SOCK_STREAM,
+						Peer => $socket)  or die "($$) cannot create client socket($socket): $!";
+		return $m;
+	},
+       'close' => sub { },
+    };
+}
+
+
+sub init_master_tcp {
+    my ($addr) = @_;
+
+
+    my ($host,$port) = split(/:/,$addr);
+    $port = 3306 unless $port > 0;
+
+    my $ad = "$host:$port";
+
+    return {
+	'kind' => 'master',
+	'str' => "master tcp $ad",
+	'type' => 'tcp',
+        'host' => $host,
+        'port' => $port,
+	'open' =>  sub {
+	    my $m =  IO::Socket::INET->new( Type => SOCK_STREAM,
+					    Proto => "tcp",
+					    PeerAddr => $host,
+					    PeerPort => $port)
+		or die "($$) cannot create client socket($ad): $!";
+	    return $m;
+	},
+       'close' => sub {
+	},
+    };
+}
+
+###############################################################################################################
 
 sub init_direction {
     my ($from,$to,$idir,$st) = @_;
@@ -848,7 +981,7 @@ sub init_direction {
     my $pseq;
 
     my $dir = $idir ? "S>C" : "C>S";
-    
+
     return sub {
 	print "($$)($dir) has data\n" if $verbose >= 2;
 	my $buf = '';
@@ -857,7 +990,7 @@ sub init_direction {
 	    $st->{quit} = 1;
 	    return;
 	}
-	
+
 	my $ret = $from->sysread($buf, $readsize);
 	if(not defined($ret)) {
 	    print "($$)($dir) read error: $!\n";
@@ -888,7 +1021,7 @@ sub init_direction {
 	    print " ($dir) : " . join ' ', map { sprintf("%02X", ord($_)) } split(//, $data);
 	    print "\n";
 
-	    my $sd = $states{$st->{state}};	
+	    my $sd = $states{$st->{state}};
 	    die "illegal state: $st->{state}" unless $sd;
 	    if($idir) {
 		die "($st->{state}) no server" unless ref($sd->{server}) eq 'CODE';
@@ -896,14 +1029,14 @@ sub init_direction {
 		$sd->{server}->($st, $data, $pseq);
 
 	    } else {
-		
+
 		die "($st->{state}) no client" unless ref($sd->{client}) eq 'CODE';
 		$st->{dir} = 'C>S';
 		$sd->{client}->($st, $data, $pseq);
 	    }
-	    $st->{dir} = undef;	    
+	    $st->{dir} = undef;
 	    $off += $plen + 4;
-	} 
+	}
 	if($off < $len) {
 	    $buffer = substr($buffer,$off);
 	    $off = 0;
@@ -930,17 +1063,16 @@ sub run_child_do {
 sub run_child {
     my ($c) = @_;
 
-    print "($$) connect\n";
+    print "($$) connect ($dst->{str})\n";
 
-    $|=1;    
+    $|=1;
 
-    my $m =  IO::Socket::UNIX->new( Type => SOCK_STREAM,
-				    Peer => $dst)  or die "($$) cannot create client socket($dst): $!";
+    my $m = $dst->{open}->();
 
     print "($$) connected: $m\n";
 
     my $sel = IO::Select->new();
-    
+
     $sel->add($c);
     $sel->add($m);
 
@@ -981,7 +1113,7 @@ sub run_child {
 
     my $cdir = init_direction($c,$m,0, $st);
     my $mdir = init_direction($m,$c,1, $st);
-    
+
     while(my @ready = $sel->can_read(10)) {
 	$buf = '';
 	for my $sock (@ready) {
@@ -992,9 +1124,8 @@ sub run_child {
 	    if($sock == $m) {
 		$mdir->();
 	    }
-	    last if $st->{quit};	    
+	    last if $st->{quit};
 	}
 
     }
 }
-
