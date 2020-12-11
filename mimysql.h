@@ -461,6 +461,7 @@ struct st_mysql {
     uint64_t client_caps;
     uint8_t protocol_version;
     uint8_t server_collation;
+    uint8_t client_collation;
     uint8_t fields_parsed;
     uint8_t packet_type;
     uint8_t allocated;
