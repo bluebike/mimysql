@@ -16,7 +16,7 @@ io + memory-handling libraries.
 
 * API mostly compatible with standard MySQL C connector api
 * Plugable alloc/free, socket handling, sha1 in separate file.
-* One .c-file, one .h-file + your file env. 
+* Few .c-files, one .h-file + your file env. 
 
 ## Usage
 

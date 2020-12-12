@@ -431,9 +431,6 @@ typedef struct st_mi_inbuf {
     uint8_t  seq;
     uint8_t  allocated;
 
-
-
-
 } MI_INBUF;
 
 
@@ -627,5 +624,57 @@ const char *mysql_get_type_name(int type);
 char *mysql_get_field_flags(char *to, int length, uint16_t flags);
 
 
+// ------------------ internal things
+
+const char *mi_notnull(const char *str);
+void mi_log_printf(void *ptr, const char *msg);
+void mi_log(MYSQL *m, uint32_t level, const char *fmt, ...);
+
+char *mi_hex_string(MIMYSQL_ENV *env, uint8_t *data, size_t len);
+char *mi_hex_string_buf(MIMYSQL_ENV *env, MI_BUF *bu);
+uint8_t *mi_find_string_end(uint8_t *p, uint8_t *e);
+
+char *mi_str_dup(MYSQL *m, const char *str);
+char *mi_str_dupn(MYSQL *m, char *str, size_t len);
+
+
+MI_BUF *mi_buf_init(MIMYSQL_ENV *env, MI_BUF *o, size_t size);
+size_t mi_buf_size(MI_BUF *o);
+void mi_buf_close(MI_BUF *o);
+
+void mi_buf_reset(MI_BUF *o);
+int mi_buf_reserve(MI_BUF *o, size_t needed);
+
+int mi_buf_add_lenc(MI_BUF *o, uint64_t val);
+int mi_buf_reset_header(MI_BUF *o, int seq);
+void mi_buf_set_length(MI_BUF *o);
+int mi_buf_add_data(MI_BUF *o, uint8_t *data, size_t len);
+int mi_buf_add_data_lenc(MI_BUF *o, uint8_t *data, size_t len);
+int mi_buf_add_uint8(MI_BUF *o, uint8_t val);
+int mi_buf_add_uint16(MI_BUF *o, uint16_t val);
+int mi_buf_add_uint24(MI_BUF *o, uint32_t val);
+int mi_buf_add_uint32(MI_BUF *o, uint32_t val);
+int mi_buf_add_uint40(MI_BUF *o, uint64_t val);
+int mi_buf_add_uint48(MI_BUF *o, uint64_t val);
+int mi_buf_add_uint64(MI_BUF *o, uint64_t val);
+int mi_buf_add_zero(MI_BUF *o, int count);
+size_t mi_buf_add_str(MI_BUF *o, const char *str, int len);
+size_t mi_buf_add_str_nul(MI_BUF *o, const char *str, int len);
+int mi_buf_add_str_lenc(MI_BUF *o, const char *str, int len);
+int mi_buf_add_str_lenc_null(MI_BUF *o, const char *str, int len);
+size_t mi_buf_add_str_len1(MI_BUF *o, const char *str, int len);
+size_t mi_buf_add_str_fixed(MI_BUF *o, const char *str, int len);
+char * mi_int2str10(char *buf, int64_t d);
+char * mi_uint2strBase(char *buf, int64_t d, int base);
+int mi_buf_sprintf(MI_BUF *o, const char *fmt, ...);
+
+
+uint64_t get_lenc64(uint8_t **ptr, uint8_t *ep);
+uint32_t get_lenc32(uint8_t **ptr, uint8_t *ep);
+int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result);
+int mdata_lenc64(uint8_t **ptr, uint8_t *ep, uint64_t * result);
+
+    
 
 #endif
+
