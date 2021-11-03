@@ -1747,7 +1747,7 @@ MYSQL *mysql_real_connect(MYSQL *m,
     }
 
     if(unix_socket) {
-        mio = env->connect_unix(m, unix_socket, 0, &err);
+        mio = env->connect_unix(m->env, unix_socket, 0, &err);
         if(mio == NULL) {
             SET_MYSQL_ERROR(m,CR_LOCALHOST_CONNECTION,sqlstate_unknown,"cannot connect unix socket errno=%d", err);
             return NULL;

@@ -40,7 +40,7 @@ static void unix_sha1(uint8_t *sha1, void *ptr, size_t length) {
     SHA1Final(sha1, &context);
 }
 
-static MIMYSQL_IO* unix_connect_unix(MYSQL *m, const char *socket_name, int flags, int *errp) {
+static MIMYSQL_IO* unix_connect_unix(MIMYSQL_ENV *env, const char *socket_name, int flags, int *errp) {
     MIMYSQL_IO *mio;
     int fd;
     int name_len;
@@ -78,14 +78,13 @@ static MIMYSQL_IO* unix_connect_unix(MYSQL *m, const char *socket_name, int flag
         return NULL;
     }
     mio->fd = fd;
-    mio->env = m->env;
-    mio->mysql = m;
+    mio->env = env;
     mio->connected = 1;
     return mio;
 };
     
 
-static MIMYSQL_IO* unix_connect_tcp(MYSQL *m, char *host, int port, int flags, int *errp) {
+static MIMYSQL_IO* unix_connect_tcp(MIMYSQL_ENV *m, char *host, int port, int flags, int *errp) {
     if(errp) { *errp = EINVAL; }
     return NULL;
 }
@@ -119,7 +118,7 @@ static void unix_close(MIMYSQL_IO *mio) {
     }
 }
 
-static void  unix_log(MYSQL *mysql, int level, const char *fmt, ...) {
+static void  unix_log(MIMYSQL_ENV *m, int level, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);    
     fprintf(stderr, "LOG: %d : ", level);

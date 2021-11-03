@@ -4,6 +4,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 
 // -----------------------------------------------------------------------------------
 
@@ -174,10 +175,10 @@
 #define MI_BUF_PTR_OFFSET(o) ((o)->ptr - (o)->buf)
 
 
-#define mdata_int64(x,v) (*((int64_t*)(x))
-#define mdata_int32(x,v) (*((int32_t*)(x)))
-#define mdata_int16(x,v) (*((int16_t*)(x)))
-#define mdata_int8(x,v)  (*((int8_t*)(x)))
+#define mdata_int64(x) (*((int64_t*)(x))
+#define mdata_int32(x) (*((int32_t*)(x)))
+#define mdata_int16(x) (*((int16_t*)(x)))
+#define mdata_int8(x)  (*((int8_t*)(x)))
 
 #define mdata_uint64(x) (*((uint64_t*)(x)))
 #define mdata_uint32(x) (*((uint32_t*)(x)))
@@ -187,6 +188,15 @@
 #define mdata_uint24(A)    (uint32_t) (((uint32_t) ((uint8_t) ((A)[0]))) + \
                                        (((uint32_t) ((uint8_t) ((A)[1]))) << 8) + \
                                        (((uint32_t) ((uint8_t) ((A)[2]))) << 16))
+
+
+#define mdata_uint48(A)    (uint64_t) (((uint64_t) ((uint8_t) ((A)[0]))) + \
+                                       (((uint64_t) ((uint8_t) ((A)[1]))) << 8)  + \
+                                       (((uint64_t) ((uint8_t) ((A)[2]))) << 16) + \
+                                       (((uint64_t) ((uint8_t) ((A)[3]))) << 24) + \
+                                       (((uint64_t) ((uint8_t) ((A)[4]))) << 32) + \
+                                       (((uint64_t) ((uint8_t) ((A)[5]))) << 40) + \
+                                       (((uint64_t) ((uint8_t) ((A)[6]))) << 48))
 
 
 
@@ -365,18 +375,16 @@ typedef struct st_mysql_field MYSQL_FIELD;
 
 struct st_mimysql_env  {
   int magic;
-  void  (*log)(MYSQL *mysql, int level, const char *fmt, ...);
+  void  (*log)(MIMYSQL_ENV *mysql, int level, const char *fmt, ...);
   void* (*alloc)(size_t size);
   void* (*realloc)(void *ptr, size_t size);
   void (*free)(void *ptr);
   void (*sha1)(uint8_t *sha1, void *ptr, size_t length);
-  MIMYSQL_IO* (*connect_unix) (MYSQL *m, const char *socket, int flags, int *errp);
-  MIMYSQL_IO* (*connect_tcp) (MYSQL *m,char *host, int port, int flags, int *errp);
+  MIMYSQL_IO* (*connect_unix) (MIMYSQL_ENV *env, const char *socket, int flags, int *errp);
+  MIMYSQL_IO* (*connect_tcp) (MIMYSQL_ENV *env,char *host, int port, int flags, int *errp);
   size_t (*read)(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp);
   size_t (*write)(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp);
   void (*close)(MIMYSQL_IO *mio);
-
-
 };
 
 
@@ -394,9 +402,9 @@ typedef struct st_mysql_field_offsets {
 
 struct st_mimysql_io {
     MIMYSQL_ENV *env;
-    MYSQL *mysql;
     int fd;
     int connected;
+    void *userptr;
 };
 
 typedef struct st_mi_buf {
@@ -559,6 +567,11 @@ uint32_t get_lenc32(uint8_t **ptr, uint8_t *ep);
 uint64_t get_lenc64(uint8_t **ptr, uint8_t *ep);
 
 
+typedef struct st_mi_string {
+    char      *ptr;
+    uint32_t  length;
+} MI_STR;
+
 /**
  * --------------------------------------------------------------------------------
  * API
@@ -674,7 +687,44 @@ uint32_t get_lenc32(uint8_t **ptr, uint8_t *ep);
 int mdata_lenc32(uint8_t **ptr, uint8_t *ep, uint32_t * result);
 int mdata_lenc64(uint8_t **ptr, uint8_t *ep, uint64_t * result);
 
-    
+
+
+static inline int mi_str_eq(char *a, size_t alen, char *b, size_t blen) {
+    return alen == blen && memcpy(a, b, alen) == 0;
+}
+
+static inline int mi_str_eq0(char *a, size_t alen, char *b) {
+    int blen = strlen(b);
+        return alen == blen && memcpy(a, b, alen) == 0;
+}
+
+
+static inline int mi_str_cmp(char *a, size_t alen, char *b, size_t blen) {
+    int ret;
+    if(alen == blen) {
+        return memcmp(a, b, alen);
+    } else if(alen < blen) {
+        ret = memcmp(a, b, alen);
+        return ret ? ret : -1;
+    } else {
+        ret = memcmp(a, b, blen);
+        return ret ? ret : 1;
+    }
+}
+
+static inline int mi_str_cmp0(char *a, size_t alen, char *b) {
+    int blen = strlen(b);
+    int ret;
+    if(alen == blen) {
+        return memcmp(a, b, alen);
+    } else if(alen < blen) {
+        ret = memcmp(a, b, alen);
+        return ret ? ret : -1;
+    } else {
+        ret = memcmp(a, b, blen);
+        return ret ? ret : 1;
+    }
+}
+
 
 #endif
-

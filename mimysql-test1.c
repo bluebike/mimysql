@@ -57,13 +57,13 @@ static void acutest_sha1(uint8_t *sha1, void *ptr, size_t length) {
     SHA1Final(sha1, &context);
 }
 
-static MIMYSQL_IO* acutest_connect_unix(MYSQL *m, const char *socket_name, int flags, int *errp) {
+static MIMYSQL_IO* acutest_connect_unix(MIMYSQL_ENV *m, const char *socket_name, int flags, int *errp) {
     if(errp) { *errp = EINVAL; }    
     return NULL;
 }
     
 
-static MIMYSQL_IO* acutest_connect_tcp(MYSQL *m, char *host, int port, int flags, int *errp) {
+static MIMYSQL_IO* acutest_connect_tcp(MIMYSQL_ENV *m, char *host, int port, int flags, int *errp) {
     if(errp) { *errp = EINVAL; }
     return NULL;
 }
@@ -82,7 +82,7 @@ static void acutest_close(MIMYSQL_IO *mio) {
     close_counter++;
 }
 
-static void  acutest_log(MYSQL *mysql, int level, const char *fmt, ...) {
+static void  acutest_log(MIMYSQL_ENV *env, int level, const char *fmt, ...) {
     va_list ap;
     va_start(ap, fmt);    
     fprintf(stderr, "LOG: %d : ", level);
