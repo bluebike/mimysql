@@ -168,6 +168,7 @@
 #define MI_AUTH_SWITCH  1
 #define MI_AUTH_OK      0
 #define MI_AUTH_ERROR  -1
+#define MI_AUTH_FAIL   -2
 
 // -----------------------------------------------------------------------------------
 
@@ -302,6 +303,7 @@ enum enum_mi_state
 #define MIMYSQL_MAGIC     0x5379472
 #define MIMYSQL_RES_MAGIC 0x5333123
 #define MIMYSQL_ENV_MAGIC_V0 0x45563300
+#define MIMYSQL_MIO_MAGIC_V0 0x45388834
 
 
 #define MYSQL_FLAGS_PLUGIN_AUTH
@@ -381,7 +383,7 @@ struct st_mimysql_env  {
   void (*free)(void *ptr);
   void (*sha1)(uint8_t *sha1, void *ptr, size_t length);
   MIMYSQL_IO* (*connect_unix) (MIMYSQL_ENV *env, const char *socket, int flags, int *errp);
-  MIMYSQL_IO* (*connect_tcp) (MIMYSQL_ENV *env,char *host, int port, int flags, int *errp);
+  MIMYSQL_IO* (*connect_tcp) (MIMYSQL_ENV *env, const char *host, int port, int flags, int *errp);
   size_t (*read)(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp);
   size_t (*write)(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp);
   void (*close)(MIMYSQL_IO *mio);
@@ -401,6 +403,7 @@ typedef struct st_mysql_field_offsets {
 
 
 struct st_mimysql_io {
+    int mio_magic;
     MIMYSQL_ENV *env;
     int fd;
     int connected;

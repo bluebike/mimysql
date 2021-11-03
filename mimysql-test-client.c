@@ -10,9 +10,11 @@
 int main(int argc, char **argv)
 {
     int ch;
-    char *socket = "/tmp/mysql.sock";
+    char *socket = NULL;
     char *user = getenv("USER");
     char *pass = NULL;
+    char *host = NULL;
+    int port = 0;
     char *db = "";
     char *auth_plugin = NULL;
     // const char *st;
@@ -29,13 +31,16 @@ int main(int argc, char **argv)
     char buf[128];
     
 
-    while ((ch = getopt(argc, argv, "tva:u:p:S:D:e:c:L:T:")) != -1) {
+    while ((ch = getopt(argc, argv, "tva:u:p:S:D:e:c:L:T:h:P:")) != -1) {
         switch (ch) {
         case 'a':
             auth_plugin = strdup(optarg);
             break;
         case 'h':
-            pass = strdup(optarg);
+            host = strdup(optarg);
+            break;
+        case 'P':
+            port = atoi(optarg);
             break;
         case 'u':
             user = strdup(optarg);
@@ -78,7 +83,9 @@ int main(int argc, char **argv)
 
      fprintf(stderr,"titles=%d\n", titles);
 
-     
+     if(!host && !socket && !port) {
+         socket = "/tmp/mysql.sock";
+     }
 
      mysql = mysql_init(NULL);
 
@@ -92,11 +99,11 @@ int main(int argc, char **argv)
      }
 
      if(mysql_real_connect(mysql,
-                           /* host */ NULL,
+                           /* host */ host,
                            /* user */ user,
                            /* pass */ pass,
                            /* db   */ db,
-                           /* port */ 0,
+                           /* port */ port,
                            /* socket */ socket,
                            /* flags */ 0) == NULL) {
          fprintf(stderr, "cannot connect:  %d  : %s\n", mysql_errno(mysql), mysql_error(mysql));

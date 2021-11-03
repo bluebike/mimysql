@@ -11,8 +11,11 @@
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <sys/uio.h>
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <stdarg.h>
+#include <netdb.h>
+#include <assert.h>
 
 
 
@@ -59,8 +62,8 @@ static MIMYSQL_IO* unix_connect_unix(MIMYSQL_ENV *env, const char *socket_name, 
         *errp = errno;
         return NULL;
     }
-    
-    
+
+
     memset(&uaddr, 0, sizeof(uaddr));
     uaddr.sun_family = AF_UNIX;
     strcpy(uaddr.sun_path, socket_name);
@@ -77,19 +80,78 @@ static MIMYSQL_IO* unix_connect_unix(MIMYSQL_ENV *env, const char *socket_name, 
         *errp = errno;
         return NULL;
     }
+    mio->mio_magic = MIMYSQL_MIO_MAGIC_V0;
     mio->fd = fd;
     mio->env = env;
     mio->connected = 1;
     return mio;
 };
-    
 
-static MIMYSQL_IO* unix_connect_tcp(MIMYSQL_ENV *m, char *host, int port, int flags, int *errp) {
-    if(errp) { *errp = EINVAL; }
-    return NULL;
+
+static MIMYSQL_IO* unix_connect_tcp(MIMYSQL_ENV *env, const char *host, int port, int flags, int *errp) {
+    MIMYSQL_IO *mio;
+    int fd;
+    struct hostent *hp;
+    struct sockaddr_in addr;
+
+    *errp = 0;
+    // get addres
+
+    memset(&addr,0,sizeof(addr));
+    addr.sin_family = AF_INET;
+    if(!host) {
+        addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    } else if(!inet_aton(host, &addr.sin_addr)) {
+        hp = gethostbyname(host);
+        if(!hp) {
+            *errp = HOST_NOT_FOUND;
+            return NULL;
+        }
+        addr.sin_addr = *((struct in_addr *) hp->h_addr);
+    }
+
+    // get port for address
+
+    if((port <= 0) || (port > 0xffff)) {
+        port = 3306;
+    }
+
+    addr.sin_port = htons(port);
+
+
+    // socket
+
+    fd = socket(AF_INET, SOCK_STREAM, 0);
+    if(fd < 0) {
+        *errp = errno;
+        return NULL;
+    }
+
+    if(connect(fd, (struct sockaddr *) &addr, sizeof(addr))) {
+        *errp = errno;
+        close(fd);
+        return NULL;
+    }
+
+    mio = calloc(sizeof(*mio), 1);
+    if(mio == NULL) {
+        *errp = errno;
+        close(fd);
+        // env->log(m, MIMYSQL_LOG_ERROR,"cannot allocate MIMYSQL_IO: %s", strerror(errno));
+        return NULL;
+    }
+    
+    mio->mio_magic = MIMYSQL_MIO_MAGIC_V0;    
+    mio->fd = fd;
+    mio->env = env;
+    mio->connected = 1;
+    mio->userptr = NULL;
+    
+    return mio;
 }
 
 static size_t unix_read(MIMYSQL_IO *mio, void *ptr, size_t length, int  *errp) {
+    assert(mio->mio_magic == MIMYSQL_MIO_MAGIC_V0);
     int ret = read(mio->fd, ptr, length);
     if(ret < 0) {
         // m->env->log(m,MIMYSQL_LOG_ERROR,"cannot read socket : %s", strerror(errno));
@@ -100,9 +162,10 @@ static size_t unix_read(MIMYSQL_IO *mio, void *ptr, size_t length, int  *errp) {
 }
 
 static size_t unix_write(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp) {
+    assert(mio->mio_magic == MIMYSQL_MIO_MAGIC_V0);    
     int ret = write(mio->fd, ptr, length);
     if(ret < 0) {
-        // m->env->log(m,MIMYSQL_LOG_ERROR,"cannot write socket : %s", strerror(errno));        
+        // m->env->log(m,MIMYSQL_LOG_ERROR,"cannot write socket : %s", strerror(errno));
         *errp = errno;
         return -1;
     }
@@ -110,6 +173,7 @@ static size_t unix_write(MIMYSQL_IO *mio, void *ptr, size_t length, int *errp) {
 }
 
 static void unix_close(MIMYSQL_IO *mio) {
+    assert(mio->mio_magic == MIMYSQL_MIO_MAGIC_V0);    
     if(mio->fd >= 0) {
         close(mio->fd);
         mio->fd = -1;
@@ -120,7 +184,7 @@ static void unix_close(MIMYSQL_IO *mio) {
 
 static void  unix_log(MIMYSQL_ENV *m, int level, const char *fmt, ...) {
     va_list ap;
-    va_start(ap, fmt);    
+    va_start(ap, fmt);
     fprintf(stderr, "LOG: %d : ", level);
     vfprintf(stderr,fmt, ap);
     fprintf(stderr, "\n");

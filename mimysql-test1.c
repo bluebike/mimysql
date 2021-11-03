@@ -63,7 +63,7 @@ static MIMYSQL_IO* acutest_connect_unix(MIMYSQL_ENV *m, const char *socket_name,
 }
     
 
-static MIMYSQL_IO* acutest_connect_tcp(MIMYSQL_ENV *m, char *host, int port, int flags, int *errp) {
+static MIMYSQL_IO* acutest_connect_tcp(MIMYSQL_ENV *m, const char *host, int port, int flags, int *errp) {
     if(errp) { *errp = EINVAL; }
     return NULL;
 }

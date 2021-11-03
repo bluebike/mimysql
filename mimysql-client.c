@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdarg.h>
 #include <math.h>
+#include <assert.h>
 
 
 extern MIMYSQL_ENV *mimysql_default_env;
@@ -656,9 +657,11 @@ void mi_set_error_text(MYSQL *m,  const char *error, int len) {
 
 int mi_connection_has_failed(MYSQL *m,  int error) {
     SET_MYSQL_ERROR(m,CR_TCP_CONNECTION,sqlstate_unknown,"connection failed");
-    m->env->close(m->mio);
-    m->connected = 0;
-    m->mio = NULL;
+    if(m->mio) {
+        m->env->close(m->mio);
+        m->connected = 0;
+        m->mio = NULL;
+    }
     return -1;
 }
 
@@ -676,7 +679,6 @@ int mi_close_connection(MYSQL *m) {
 }
 
 int mi_read_next_packet(MYSQL *m) {
-    MIMYSQL_IO *mio = m->mio;
     MI_INBUF *b = &m->inbuf;
     MIMYSQL_ENV *env = b->env;
     int ret;
@@ -703,7 +705,7 @@ int mi_read_next_packet(MYSQL *m) {
         }
         do {
             b->reads++;
-            ret = env->read(mio, b->readptr, b->endbuf - b->readptr, &err);
+            ret = env->read(m->mio, b->readptr, b->endbuf - b->readptr, &err);
             if(ret < 0) {
                 goto erro;
             }
@@ -732,7 +734,7 @@ int mi_read_next_packet(MYSQL *m) {
 
         b->reads++;
 
-        ret = env->read(mio, b->readptr, b->endbuf - b->readptr, &err);
+        ret = env->read(m->mio, b->readptr, b->endbuf - b->readptr, &err);
         if(ret < 0) {
             goto erro;
             return -1;
@@ -945,17 +947,17 @@ static int mi_write_fully(MIMYSQL_IO *mio, uint8_t *ptr, size_t size, int *err) 
 }
 
 int mi_write_outbuf(MYSQL *m) {
-    MIMYSQL_IO *mio = m->mio;
     MI_BUF *o = &m->outbuf;
     uint8_t *buf = o->buf;
     size_t  write_size = o->ptr - o->buf;
     int ret;
     int err = 0;
 
-    assert(mio && o->buf);
+    assert(m->magic == MIMYSQL_MAGIC);
+    assert(m->mio);
     assert(o->ptr);
     assert(o->ptr > o->buf);
-    assert(mio->env == o->env);
+    assert(m->mio->env == o->env);
 
     if(m->log_level >= MI_LOG_TRACE) {
         mi_log(m,
@@ -968,7 +970,7 @@ int mi_write_outbuf(MYSQL *m) {
         mi_display_packet(m, "WRITE", o->buf, o->ptr);
     }
 
-    if((ret = mi_write_fully(mio,  buf, write_size, &err)) < 0) {
+    if((ret = mi_write_fully(m->mio,  buf, write_size, &err)) < 0) {
         mi_log(m,MI_LOG_ERROR,"write failed: %d", err);
         SET_MYSQL_ERROR(m,CR_TCP_CONNECTION,sqlstate_unknown,"write to socket failed: %d", err);
         mi_close_connection(m);
@@ -1400,7 +1402,7 @@ int mi_wait_for_auth_reply(MYSQL *m) {
         m->packet_type = PACKET_ERR;
         ret = mi_parse_err_packet(m, b->packet_data, b->packet_end);
         mi_log(m,MI_LOG_WARN,"(waitok) got error  packet: error-code: %d,  info=%s", m->errno,  m->error_text);
-        return MI_AUTH_ERROR;
+        return MI_AUTH_FAIL;
     } else {
         mi_log(m,MI_LOG_ERROR,"(waitok) illegal reply type: %d", ptype);
         return MI_AUTH_ERROR;
@@ -1701,7 +1703,6 @@ MYSQL *mysql_real_connect(MYSQL *m,
                           unsigned long flags)
 {
     MIMYSQL_ENV *env  = m->env;
-    MIMYSQL_IO *mio = NULL;
     MI_INBUF *b;
     int err = 0;
     int ret;
@@ -1747,24 +1748,26 @@ MYSQL *mysql_real_connect(MYSQL *m,
     }
 
     if(unix_socket) {
-        mio = env->connect_unix(m->env, unix_socket, 0, &err);
-        if(mio == NULL) {
+        m->mio = env->connect_unix(m->env, unix_socket, 0, &err);
+        if(!(m->mio)) {
             SET_MYSQL_ERROR(m,CR_LOCALHOST_CONNECTION,sqlstate_unknown,"cannot connect unix socket errno=%d", err);
             return NULL;
         }
-    } else {
-        SET_MYSQL_ERROR(m,CR_SOCKET_CREATE_ERROR,sqlstate_unknown,"only unix domain is supported so far");
-        mi_log(m,4,"only unix domain supported");
-        return NULL;
-    }
+    } else if(host || port) {
+        m->mio = env->connect_tcp(m->env, host, port, 0, &err);
+        if(!(m->mio)) {
+            SET_MYSQL_ERROR(m,CR_LOCALHOST_CONNECTION, sqlstate_unknown,"cannot connect tcp socket %s:%d errno=%d",
+                            host ? host : "NULL", port, err);
+            return NULL;
+        }
+    } 
 
-    if(mio == NULL) {
+    if(!(m->mio)) {
         SET_MYSQL_ERROR(m,CR_SOCKET_CREATE_ERROR,sqlstate_unknown,"cannot get connection: %d", err);
         mi_log(m,MI_LOG_ERROR,"cannot connect error: %d", err);
         return NULL;
     }
 
-    m->mio = mio;
     b = &m->inbuf;
 
     if(mi_read_next_packet(m) < 0){
@@ -1812,17 +1815,22 @@ MYSQL *mysql_real_connect(MYSQL *m,
         mi_log(m, MI_LOG_DEBUG, "auth result: %d", ret);
 
         if(ret == MI_AUTH_OK) {
-            m->connected =  1;
+            m->connected = 1;
+        } else if(ret == MI_AUTH_FAIL) {
+            mi_close_connection(m);
+            SET_MYSQL_ERROR(m,CR_SECURE_AUTH,sqlstate_unknown,"authentication failed");
+            return NULL;
         } else if(ret < 0) {
             mi_close_connection(m);
             SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"handshake error");
+            return NULL;
         } else if(ret == MI_AUTH_SWITCH) {
             // again.
         } else if(ret == MI_AUTH_OLD) {
             just_old_password = 1;
         } else {
-            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"bad reply: %d", ret);
             mi_close_connection(m);
+            SET_MYSQL_ERROR(m,CR_AUTH_PLUGIN_ERR,sqlstate_unknown,"bad reply: %d", ret);            
             return NULL;
         }
     } while(!m->connected);
